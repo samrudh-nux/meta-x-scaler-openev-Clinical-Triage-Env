@@ -1,641 +1,716 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
 import re
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 from models import TriageAction, MedicationSafetyAction, SepsisManagementAction
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared result dataclass
+# ─────────────────────────────────────────────────────────────────────────────
+
 @dataclass
 class GradeResult:
-    """Detailed grading result."""
-    score: float                        # 0.0 – 1.0
-                    component_scores: Dict[str, float]  # breakdown by criterion
-    feedback: str                        # human-readable explanation
-                critical_errors: List[str] = field(default_factory=list)  # safety-critical failures
-    passed: bool = False
+    """Detailed grading result returned by every grader."""
+    score: float                          # 0.0 – 1.0 base (before difficulty multiplier)
+    component_scores: Dict[str, float]   # per-axis breakdown
+    feedback: str                         # human-readable explanation
+    critical_errors: List[str] = field(default_factory=list)  # patient-safety failures
+    passed: bool = False                  # score >= 0.60 AND no critical errors
+    confidence: str = "high"             # "high" | "medium" | "low"
+    teaching_point: str = ""             # one sentence educational note
 
 
-# 
-# GRADER 1: Emergency Triage (ESI Level Assignment)
-# 
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared NLP helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _tokenise(text: str) -> List[str]:
+    """Lowercase word tokens, strip punctuation."""
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+def _token_overlap(a: str, b: str) -> float:
+    """Jaccard-like token overlap between two strings."""
+    ta, tb = set(_tokenise(a)), set(_tokenise(b))
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+def _keyword_score(text: str, keywords: List[str], threshold: int = 3) -> float:
+    """Fraction of expected keywords found in text (case-insensitive)."""
+    if not keywords or not text:
+        return 0.0
+    text_l = text.lower()
+    found = sum(1 for kw in keywords if kw.lower() in text_l)
+    return min(1.0, found / max(threshold, len(keywords) * 0.4))
+
+def _fuzzy_list_recall(proposed: List[str], ground_truth: List[str]) -> float:
+    """Recall: what fraction of GT items were detected (fuzzy match)."""
+    if not ground_truth:
+        return 1.0
+    if not proposed:
+        return 0.0
+    proposed_blob = " ".join(proposed).lower()
+    found = 0
+    for gt_item in ground_truth:
+        words = [w for w in _tokenise(gt_item) if len(w) > 3]
+        if not words:
+            continue
+        hits = sum(1 for w in words if w in proposed_blob)
+        if hits >= max(1, int(len(words) * 0.4)):
+            found += 1
+    return round(found / len(ground_truth), 3)
+
+def _false_positive_rate(proposed: List[str], ground_truth: List[str]) -> float:
+    """Fraction of proposed items that appear to be hallucinations."""
+    if not proposed:
+        return 0.0
+    if not ground_truth:
+        return min(1.0, len(proposed) * 0.15)
+    gt_blob = " ".join(ground_truth).lower()
+    fps = 0
+    for item in proposed:
+        words = [w for w in _tokenise(item) if len(w) > 3]
+        if words and not any(w in gt_blob for w in words):
+            fps += 1
+    return fps / len(proposed)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GRADER 1 — Emergency Triage (ESI Level Assignment)
+# ─────────────────────────────────────────────────────────────────────────────
 
 class TriageGrader:
     """
-    Grades ESI level assignment. Partial credit for being 1 level off.
-    Critical penalties for undertriage (assigning lower acuity than needed).
-    Undertriage is MORE dangerous than overtriage in emergency medicine.
+    8-component triage grader.
+    Components: ESI accuracy, acceptable-range bonus, undertriage safety,
+    rationale keyword density, clinical flag recognition, intervention recall,
+    intervention precision, time-sensitivity awareness.
     """
 
-    # Penalty weights
-                 EXACT_MATCH_SCORE = 1.0
-                         ONE_OFF_SCORE = 0.6
-                     TWO_OFF_SCORE = 0.2
-             UNDERTRIAGE_PENALTY = 0.4   # Extra penalty: ESI assigned HIGHER number = lower priority
-    RATIONALE_WEIGHT = 0.2
-    INTERVENTION_WEIGHT = 0.15
+    # Weights must sum to 1.0
+    WEIGHTS = {
+        "esi_accuracy":           0.40,
+        "acceptable_range_bonus": 0.05,
+        "rationale_keywords":     0.15,
+        "clinical_flags":         0.10,
+        "intervention_recall":    0.15,
+        "intervention_precision": 0.05,
+        "time_sensitivity":       0.10,
+    }
 
-    def grade(
-        self,
-                action: TriageAction,
-        scenario: Dict[str, Any]
-    ) -> GradeResult:
+    # ESI accuracy lookup
+    _ESI_SCORES = {0: 1.0, 1: 0.55, 2: 0.20, 3: 0.05}
 
-        ground_truth_esi = scenario["ground_truth_esi"]
-        acceptable_range = scenario["acceptable_esi_range"]
-  critical_interventions = scenario.get("critical_interventions", [])
-        difficulty = scenario.get("difficulty", "medium")
+    # Undertriage penalty (GT ≤ 2, assigned ≥ 3 → life-threatening)
+    UNDERTRIAGE_PENALTY_MAJOR = 0.45   # assigned ≥ 3 when GT ≤ 2
+    UNDERTRIAGE_PENALTY_MINOR = 0.20   # assigned GT+1 when GT == 1
 
-        component_scores: Dict[str, float] = {}
-                      critical_errors: List[str] = []
+    def grade(self, action: TriageAction, scenario: Dict[str, Any]) -> GradeResult:
+        gt_esi      = scenario["ground_truth_esi"]
+        acceptable  = scenario["acceptable_esi_range"]
+        critical_iv = scenario.get("critical_interventions", [])
+        teaching    = scenario.get("teaching_point", "")
+        patient     = scenario["patient"]
 
-        # ── Component 1: ESI accuracy (0–1) ──────────────────────
-        esi_diff = abs(action.esi_level - ground_truth_esi)
-        if esi_diff == 0:
-            esi_score = 1.0
-          
-        elif action.esi_level in acceptable_range:
-              esi_score = 0.75
-        elif esi_diff == 1:
-          
-            esi_score = 0.5
-          
-        elif esi_diff == 2:
-            esi_score = 0.2
-        else:
+        cs: Dict[str, float] = {}
+        errors: List[str] = []
+
+        # ── 1. ESI accuracy ─────────────────────────────────────────────────
+        diff = abs(action.esi_level - gt_esi)
+        esi_score = self._ESI_SCORES.get(diff, 0.0)
+
+        # Undertriage: assigned higher number = lower priority = dangerous
+        if gt_esi <= 2 and action.esi_level >= 3:
+            esi_score = max(0.0, esi_score - self.UNDERTRIAGE_PENALTY_MAJOR)
+            errors.append(
+                f"UNDERTRIAGE ALERT: Patient requires ESI-{gt_esi} "
+                f"(immediate/emergent) but received ESI-{action.esi_level}. "
+                f"This represents a life-threatening triage error."
+            )
+        elif gt_esi == 1 and action.esi_level == 2:
+            esi_score = max(0.0, esi_score - self.UNDERTRIAGE_PENALTY_MINOR)
+            errors.append(
+                "MINOR UNDERTRIAGE: ESI-1 resuscitation patient assigned ESI-2. "
+                "Immediate physician presence is mandatory for ESI-1."
+            )
+
+        # Hard cap: ESI-1 patient assigned ESI-4/5 → near-zero
+        if gt_esi == 1 and action.esi_level >= 4:
             esi_score = 0.0
-
-        # Undertriage: assigning HIGHER ESI number (lower priority) when patient is critical
-        if ground_truth_esi <= 2 and action.esi_level >= 3:
-            esi_score = max(0.0, esi_score - self.UNDERTRIAGE_PENALTY)
-            critical_errors.append(
-                f"UNDERTRIAGE: Patient requires ESI-{ground_truth_esi} but assigned ESI-{action.esi_level}. "
-                f"This is a life-threatening safety error in emergency medicine."
+            errors.append(
+                "CRITICAL PATIENT SAFETY FAILURE: ESI-1 resuscitation patient "
+                f"assigned to non-urgent category (ESI-{action.esi_level})."
             )
 
-        component_scores["esi_accuracy"] = esi_score
+        cs["esi_accuracy"] = round(esi_score, 3)
 
-        # ── Component 2: Rationale quality
-        rationale_score = self._score_rationale(
-            action.rationale, scenario, ground_truth_esi
+        # ── 2. Acceptable range bonus ────────────────────────────────────────
+        cs["acceptable_range_bonus"] = 1.0 if action.esi_level in acceptable else 0.0
+
+        # ── 3. Rationale keyword density ────────────────────────────────────
+        cs["rationale_keywords"] = self._score_rationale_keywords(
+            action.rationale, patient, gt_esi
         )
-        component_scores["rationale_quality"] = rationale_score
 
-        # ── Component 3: Critical interventions 
-        if critical_interventions:
-            intervention_score = self._score_interventions(
-                action.recommended_immediate_interventions,
-                critical_interventions
-            )
+        # ── 4. Clinical flag recognition ─────────────────────────────────────
+        cs["clinical_flags"] = self._score_clinical_flags(
+            action.rationale, patient
+        )
+
+        # ── 5 & 6. Intervention recall + precision ───────────────────────────
+        if critical_iv:
+            recall    = _fuzzy_list_recall(action.recommended_immediate_interventions, critical_iv)
+            fp_rate   = _false_positive_rate(action.recommended_immediate_interventions, critical_iv)
+            precision = max(0.0, 1.0 - fp_rate * 0.5)  # soft precision
         else:
-            intervention_score = 1.0  # No interventions expected, full credit
-        component_scores["critical_interventions"] = intervention_score
+            recall = precision = 1.0  # no interventions expected → full credit
+        cs["intervention_recall"]    = round(recall, 3)
+        cs["intervention_precision"] = round(precision, 3)
 
-        # ── Weighted final score 
-        # ESI accuracy is most important (65%), rationale 20%, interventions 15%
-        final = (
-            0.65 * esi_score +
-            0.20 * rationale_score +
-            0.15 * intervention_score
+        # ── 7. Time-sensitivity awareness ────────────────────────────────────
+        cs["time_sensitivity"] = self._score_time_awareness(
+            action.rationale, action.recommended_immediate_interventions, gt_esi, patient
         )
-        # Clamp
-        final = max(0.0, min(1.0, final))
 
-        # Hard fail: ESI-1 patient assigned ESI-4 or 5
-        if ground_truth_esi == 1 and action.esi_level >= 4:
-            final = min(final, 0.1)
-            critical_errors.append("CRITICAL: ESI-1 resuscitation patient assigned to non-urgent category.")
+        # ── Weighted final ───────────────────────────────────────────────────
+        final = sum(self.WEIGHTS[k] * cs[k] for k in self.WEIGHTS)
+        final = round(max(0.0, min(1.0, final)), 4)
 
-        feedback = self._build_feedback(
-            action, ground_truth_esi, acceptable_range,
-            component_scores, critical_errors, scenario
-        )
+        confidence = "high" if diff == 0 else ("medium" if diff == 1 else "low")
 
         return GradeResult(
-            score=round(final, 3),
-            component_scores=component_scores,
-            feedback=feedback,
-            critical_errors=critical_errors,
-            passed=(final >= 0.6 and not critical_errors)
+            score=final,
+            component_scores=cs,
+            feedback=self._build_feedback(action, gt_esi, acceptable, cs, errors, scenario),
+            critical_errors=errors,
+            passed=(final >= 0.60 and not errors),
+            confidence=confidence,
+            teaching_point=teaching,
         )
 
-    def _score_rationale(self, rationale: str, scenario: Dict, gt_esi: int) -> float:
-        """Score rationale based on clinical keywords and completeness."""
+    def _score_rationale_keywords(self, rationale: str, patient, gt_esi: int) -> float:
         if not rationale or len(rationale.strip()) < 10:
             return 0.0
+        v = patient.vitals
+        kws: List[str] = []
 
-        rationale_lower = rationale.lower()
-        score = 0.3  # Base for any rationale
-
-        # Check for relevant clinical terms
-        vitals = scenario["patient"].vitals
-        keywords_found = 0
-        expected_keywords = []
-
-        # Build expected keywords from scenario
         if gt_esi <= 2:
-            expected_keywords.extend(["urgent", "immediate", "critical", "emergent", "high risk",
-                                       "life threat", "time", "priority"])
-        if vitals.heart_rate > 100:
-                  expected_keywords.extend(["tachycardia", "heart rate", "hr"])
-        if vitals.systolic_bp < 90:
-            expected_keywords.extend(["hypotension", "blood pressure", "bp", "shock"])
-          
-                if vitals.spo2 < 94:
-            expected_keywords.extend(["hypoxia", "oxygen", "spo2", "saturation"])
+            kws += ["urgent", "immediate", "emergent", "critical", "high risk",
+                    "life threat", "priority", "time-sensitive"]
+        if v.heart_rate > 100:  kws += ["tachycardia", "heart rate", "hr"]
+        if v.systolic_bp < 90:  kws += ["hypotension", "blood pressure", "shock"]
+        if v.spo2 < 94:         kws += ["hypoxia", "oxygen", "spo2", "saturation"]
+        if v.temperature > 38.3: kws += ["fever", "febrile", "temperature"]
+        if v.glasgow_coma_scale < 14: kws += ["altered", "confusion", "gcs", "consciousness"]
 
-      
-        if vitals.temperature > 38.5:
-            expected_keywords.extend(["fever", "temperature", "febrile"])
-          
+        cc = patient.chief_complaint.lower()
+        if "chest" in cc:     kws += ["chest", "cardiac", "acs", "mi", "stemi", "ecg", "troponin"]
+        if any(x in cc for x in ("weakness", "confusion", "droop", "stroke")): 
+            kws += ["stroke", "neuro", "focal", "fast", "deficit", "tpa", "ct head"]
+        if "headache" in cc:  kws += ["headache", "thunderclap", "subarachnoid", "sah", "lumbar"]
+        if "sepsis" in cc or "fever" in cc: kws += ["sepsis", "infection", "antibiotics", "cultures"]
 
-        chief = scenario["patient"].chief_complaint.lower()
-        if "chest" in chief:
-            expected_keywords.extend(["chest", "cardiac", "acs", "mi", "stemi", "ecg"])
-        if "stroke" in chief or "weakness" in chief or "confusion" in chief:
-            expected_keywords.extend(["stroke", "neuro", "focal", "fast", "deficit"])
-        if "headache" in chief:
-            expected_keywords.extend(["headache", "sah", "subarachnoid", "thunderclap"])
+        return _keyword_score(rationale, kws, threshold=3)
 
-        for kw in expected_keywords:
-            if kw in rationale_lower:
-                keywords_found += 1
-
-        if expected_keywords:
-            keyword_score = min(1.0, keywords_found / max(3, len(expected_keywords) * 0.4))
-            score += 0.7 * keyword_score
-
-        return min(1.0, score)
-
-    def _score_interventions(self, proposed: List[str], expected: List[str]) -> float:
-        """Score intervention completeness."""
-        if not expected:
-            return 1.0
-        if not proposed:
+    def _score_clinical_flags(self, rationale: str, patient) -> float:
+        """Bonus for identifying specific vital sign abnormalities."""
+        if not rationale:
             return 0.0
+        v = patient.vitals
+        flags_expected = []
+        flags_found = 0
 
-        proposed_str = " ".join(proposed).lower()
-        found = 0
-        for intervention in expected:
-            # Flexible matching
-            intervention_words = intervention.lower().replace("_", " ").split()
-            if any(word in proposed_str for word in intervention_words):
-                found += 1
+        if v.heart_rate > 100 or v.heart_rate < 50:
+            flags_expected.append(str(v.heart_rate))
+        if v.systolic_bp < 90 or v.systolic_bp > 180:
+            flags_expected.append(str(v.systolic_bp))
+        if v.spo2 < 95:
+            flags_expected.append(str(v.spo2))
+        if v.glasgow_coma_scale < 15:
+            flags_expected.append(str(v.glasgow_coma_scale))
+        if v.temperature > 38.5 or v.temperature < 36.0:
+            flags_expected.append(str(v.temperature))
 
-        return min(1.0, found / len(expected))
+        if not flags_expected:
+            return 1.0  # all normal — full credit for any coherent rationale
 
-    def _build_feedback(self, action, gt_esi, acceptable, components, errors, scenario):
+        for flag in flags_expected:
+            if flag in rationale:
+                flags_found += 1
+
+        return min(1.0, flags_found / len(flags_expected))
+
+    def _score_time_awareness(self, rationale: str, interventions: List[str],
+                               gt_esi: int, patient) -> float:
+        if gt_esi >= 4:
+            return 1.0  # not time-critical
+        all_text = (rationale + " " + " ".join(interventions)).lower()
+        time_words = ["stat", "immediate", "now", "urgent", "asap", "within",
+                      "minute", "door-to", "activate", "alert", "consult"]
+        found = sum(1 for w in time_words if w in all_text)
+        return min(1.0, found / 2)  # need at least 2 time-awareness signals
+
+    def _build_feedback(self, action, gt_esi, acceptable, cs, errors, scenario) -> str:
         lines = [
-            f"=== TRIAGE GRADER FEEDBACK ===",
-                     f"Patient: {scenario['patient'].chief_complaint}",
-                        f"Your ESI: {action.esi_level} | Correct ESI: {gt_esi} (acceptable: {acceptable})",
-                       f"",
-            f"Component Scores:",
-                     f"  ESI Accuracy:            {components['esi_accuracy']:.2f}",
-  f"  Rationale Quality:       {components['rationale_quality']:.2f}",
-            f"  Critical Interventions:  {components['critical_interventions']:.2f}",
-        ]
-        if errors:
-            lines.append(f"\n⚠️  CRITICAL ERRORS:")
-            for e in errors:
-                lines.append(f"  - {e}")
-        lines.append(f"\nTeaching Point: {scenario.get('teaching_point', 'N/A')}")
-          return "\n".join(lines)
-
-
-#
-# GRADER 2: Medication Safety Review
-# 
-
-class MedicationSafetyGrader:
-    """
-    Grades medication safety review. Rewards catching interactions,
-    contraindications, and dosing errors. Penalizes false positives
-    (hallucinating interactions that don't exist).
-    """
-
-    def grade(
-        self,
-        action: MedicationSafetyAction,
-        scenario: Dict[str, Any]
-    ) -> GradeResult:
-
-        gt = scenario["ground_truth"]
-        component_scores: Dict[str, float] = {}
-        critical_errors: List[str] = []
-
-        # ── Component 1: Interaction detection ──────────────────
-        interaction_score = self._score_list_detection(
-            proposed=action.flagged_interactions,
-            ground_truth=gt["interactions"],
-            allow_partial_match=True
-        )
-        component_scores["interaction_detection"] = interaction_score
-
-        # ── Component 2: Contraindication detection ─────────────
-        contra_score = self._score_list_detection(
-            proposed=action.flagged_contraindications,
-                     ground_truth=gt["contraindications"],
-            allow_partial_match=True
-        )
-        component_scores["contraindication_detection"] = contra_score
-
-        # ── Component 3: Dosing error detection ─────────────────
-        dose_score = self._score_list_detection(
-                             proposed=action.flagged_dosing_errors,
-            ground_truth=gt["dosing_errors"],
-            allow_partial_match=True
-        )
-        component_scores["dosing_error_detection"] = dose_score
-
-        # ── Component 4: Severity classification ─────────────────
-        severity_score = self._score_severity(action.severity_assessment, gt["severity"])
-                   component_scores["severity_classification"] = severity_score
-
-        # ── Component 5: Clinical rationale ──────────────────────
-        rationale_score = self._score_med_rationale(
-            action.clinical_rationale, gt, scenario
-        )
-        component_scores["clinical_rationale"] = rationale_score
-
-        # ── Component 6: False positive penalty ──────────────────
-        fp_penalty = self._false_positive_penalty(
-            action.flagged_interactions,
-            action.flagged_contraindications,
-            gt
-        )
-        component_scores["false_positive_penalty"] = fp_penalty
-
-        # Weighted final
-        final = (
-            0.25 * interaction_score +
-                      0.20 * contra_score +
-                     0.15 * dose_score +
-            0.15 * severity_score +
-                    0.15 * rationale_score +
-            0.10 * fp_penalty
-        )
-        final = max(0.0, min(1.0, final))
-
-        # Critical error: missed critical severity and called it "safe"
-        if gt["severity"] == "critical" and action.severity_assessment == "safe":
-            final = min(final, 0.15)
-            critical_errors.append("CRITICAL: Classified a critical/life-threatening medication situation as 'safe'.")
-
-        if gt["severity"] == "critical" and action.severity_assessment == "minor":
-              final = min(final, 0.25)
-                      critical_errors.append("Severely underestimated severity of critical medication interaction.")
-
-        feedback = self._build_feedback(action, gt, component_scores, critical_errors, scenario)
-
-        return GradeResult(
-            score=round(final, 3),
-            component_scores=component_scores,
-                       feedback=feedback,
-                     critical_errors=critical_errors,
-            passed=(final >= 0.6 and not critical_errors)
-        )
-
-    def _score_list_detection(self, proposed: List[str], ground_truth: List[str],
-                               allow_partial_match: bool = True) -> float:
-        if not ground_truth:
-            # No issues expected: reward if agent also found nothing
-            if not proposed:
-                return 1.0
-            else:
-                return max(0.0, 1.0 - 0.1 * len(proposed))  # Minor FP penalty
-
-        if not proposed:
-            return 0.0
-
-        proposed_str = " ".join(proposed).lower()
-        found = 0
-        for gt_item in ground_truth:
-            gt_words = re.split(r'[\s\+\-\_\(\)]', gt_item.lower())
-            gt_words = [w for w in gt_words if len(w) > 3]
-            matches = sum(1 for w in gt_words if w in proposed_str)
-            if allow_partial_match:
-                if matches >= max(1, len(gt_words) * 0.4):
-                    found += 1
-            else:
-                if matches == len(gt_words):
-                    found += 1
-
-        recall = found / len(ground_truth)
-        return round(recall, 3)
-
-    def _score_severity(self, proposed: str, ground_truth: str) -> float:
-        severity_map = {"safe": 0, "minor": 1, "moderate": 2, "major": 3, "critical": 4}
-        p = severity_map.get(proposed.lower(), -1)
-        g = severity_map.get(ground_truth.lower(), -1)
-        if p == -1 or g == -1:
-            return 0.3
-        diff = abs(p - g)
-        return {0: 1.0, 1: 0.6, 2: 0.3, 3: 0.1, 4: 0.0}.get(diff, 0.0)
-
-    def _score_med_rationale(self, rationale: str, gt: Dict, scenario: Dict) -> float:
-        if not rationale or len(rationale.strip()) < 20:
-            return 0.0
-
-        score = 0.2
-        rationale_lower = rationale.lower()
-
-        # Check for drug names mentioned
-        meds = [m.name.lower() for m in scenario["patient"].current_medications]
-                 mentioned = sum(1 for m in meds if m.split("_")[0] in rationale_lower)
-        score += 0.3 * min(1.0, mentioned / max(1, len(meds)))
-
-        # Key finding keywords
-        key_findings = gt.get("key_findings", "").lower()
-        key_words = [w for w in key_findings.split() if len(w) > 5]
-        found = sum(1 for w in key_words[:10] if w in rationale_lower)
-        score += 0.5 * min(1.0, found / max(1, min(10, len(key_words))) * 2)
-
-        return min(1.0, score)
-
-    def _false_positive_penalty(self, proposed_interactions, proposed_contras, gt):
-        """Penalize hallucinated interactions."""
-        if not proposed_interactions and not proposed_contras:
-            return 1.0
-        # Simple heuristic: if claimed many interactions but GT has few, penalize
-        total_proposed = len(proposed_interactions) + len(proposed_contras)
-        total_gt = len(gt["interactions"]) + len(gt["contraindications"])
-        if total_gt == 0 and total_proposed > 3:
-            return 0.4
-        ratio = total_proposed / max(1, total_gt)
-        if ratio > 4:
-            return 0.5
-        elif ratio > 2.5:
-            return 0.75
-        return 1.0
-
-    def _build_feedback(self, action, gt, components, errors, scenario):
-        lines = [
-            "=== MEDICATION SAFETY GRADER FEEDBACK ===",
+            "=== TRIAGE GRADER FEEDBACK (v2) ===",
             f"Patient: {scenario['patient'].chief_complaint}",
-            f"Expected severity: {gt['severity']} | Your severity: {action.severity_assessment}",
+            f"Assigned ESI: {action.esi_level}  |  Correct ESI: {gt_esi}  "
+            f"|  Acceptable Range: {acceptable}",
             "",
             "Component Scores:",
-            f"  Interaction Detection:    {components['interaction_detection']:.2f}",
-                         f"  Contraindication Detect:  {components['contraindication_detection']:.2f}",
-                      f"  Dosing Error Detection:   {components['dosing_error_detection']:.2f}",
-                                    f"  Severity Classification:  {components['severity_classification']:.2f}",
-            f"  Clinical Rationale:       {components['clinical_rationale']:.2f}",
-    f"  False Positive Penalty:   {components['false_positive_penalty']:.2f}",
         ]
+        for k, v in cs.items():
+            bar = "█" * int(v * 10) + "░" * (10 - int(v * 10))
+            lines.append(f"  {k:35s} {bar}  {v:.3f}")
         if errors:
-            lines.append("\n⚠️  CRITICAL ERRORS:")
+            lines.append("\n⚠️  PATIENT SAFETY ALERTS:")
             for e in errors:
-                lines.append(f"  - {e}")
-        lines.append(f"\nKey Findings: {gt['key_findings']}")
+                lines.append(f"  ✗ {e}")
+        if scenario.get("teaching_point"):
+            lines.append(f"\n📚 Teaching Point: {scenario['teaching_point']}")
         return "\n".join(lines)
 
 
-# 
-# GRADER 3: Sepsis Management (Hour-1 Bundle)
-# 
+# ─────────────────────────────────────────────────────────────────────────────
+# GRADER 2 — Medication Safety Review
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MedicationSafetyGrader:
+    """
+    7-component medication safety grader.
+    Components: interaction recall, contraindication recall, dosing error recall,
+    severity classification, recommended changes quality, clinical rationale depth,
+    false positive penalty.
+    """
+
+    WEIGHTS = {
+        "interaction_recall":      0.28,
+        "contraindication_recall": 0.18,
+        "dosing_error_recall":     0.10,
+        "severity_accuracy":       0.15,
+        "recommended_changes":     0.12,
+        "rationale_depth":         0.12,
+        "fp_penalty":              0.05,
+    }
+
+    _SEVERITY_MAP = {"safe": 0, "minor": 1, "moderate": 2, "major": 3, "critical": 4}
+
+    def grade(self, action: MedicationSafetyAction, scenario: Dict[str, Any]) -> GradeResult:
+        gt      = scenario["ground_truth"]
+        patient = scenario["patient"]
+        cs: Dict[str, float] = {}
+        errors: List[str] = []
+
+        # ── Recall components ────────────────────────────────────────────────
+        cs["interaction_recall"]      = _fuzzy_list_recall(action.flagged_interactions,
+                                                            gt["interactions"])
+        cs["contraindication_recall"] = _fuzzy_list_recall(action.flagged_contraindications,
+                                                            gt["contraindications"])
+        cs["dosing_error_recall"]     = _fuzzy_list_recall(action.flagged_dosing_errors,
+                                                            gt["dosing_errors"])
+
+        # ── Severity ─────────────────────────────────────────────────────────
+        cs["severity_accuracy"] = self._score_severity(
+            action.severity_assessment, gt["severity"]
+        )
+
+        # ── Recommended changes ──────────────────────────────────────────────
+        cs["recommended_changes"] = self._score_recommendations(
+            action.recommended_changes, gt, patient
+        )
+
+        # ── Rationale depth ──────────────────────────────────────────────────
+        cs["rationale_depth"] = self._score_rationale(
+            action.clinical_rationale, gt, patient
+        )
+
+        # ── False positive penalty ───────────────────────────────────────────
+        all_gt = gt["interactions"] + gt["contraindications"] + gt["dosing_errors"]
+        all_proposed = (action.flagged_interactions
+                        + action.flagged_contraindications
+                        + action.flagged_dosing_errors)
+        fp_rate = _false_positive_rate(all_proposed, all_gt)
+        cs["fp_penalty"] = max(0.0, 1.0 - fp_rate * 1.5)
+
+        # ── Critical error rules ─────────────────────────────────────────────
+        gt_sev = gt["severity"]
+        prop_sev = action.severity_assessment.lower()
+
+        if gt_sev == "critical" and prop_sev == "safe":
+            errors.append("CRITICAL: Life-threatening drug interaction classified as 'safe'.")
+        elif gt_sev == "critical" and prop_sev == "minor":
+            errors.append("SEVERE UNDERESTIMATE: Critical severity rated as 'minor'.")
+        elif gt_sev == "major" and prop_sev == "safe":
+            errors.append("SEVERITY ERROR: Major drug interaction classified as 'safe'.")
+
+        # ── Weighted final ───────────────────────────────────────────────────
+        final = sum(self.WEIGHTS[k] * cs[k] for k in self.WEIGHTS)
+        if errors:
+            final = min(final, 0.20 if "CRITICAL" in errors[0] else 0.35)
+        final = round(max(0.0, min(1.0, final)), 4)
+
+        return GradeResult(
+            score=final,
+            component_scores=cs,
+            feedback=self._build_feedback(action, gt, cs, errors, scenario),
+            critical_errors=errors,
+            passed=(final >= 0.60 and not errors),
+            confidence="high" if cs["interaction_recall"] > 0.8 else "medium",
+            teaching_point=gt.get("key_findings", ""),
+        )
+
+    def _score_severity(self, proposed: str, ground_truth: str) -> float:
+        p = self._SEVERITY_MAP.get(proposed.lower().strip(), -1)
+        g = self._SEVERITY_MAP.get(ground_truth.lower().strip(), -1)
+        if p < 0 or g < 0:
+            return 0.3
+        diff = abs(p - g)
+        return {0: 1.0, 1: 0.65, 2: 0.30, 3: 0.10, 4: 0.0}.get(diff, 0.0)
+
+    def _score_recommendations(self, recommended: List[str],
+                                gt: Dict, patient) -> float:
+        if not recommended:
+            return 0.0
+        rec_blob = " ".join(recommended).lower()
+        # Check for actionable verbs (discontinue, reduce, switch, monitor, hold)
+        action_words = ["discontinue", "stop", "hold", "reduce", "switch",
+                        "change", "monitor", "avoid", "replace", "add"]
+        action_score = min(1.0, sum(1 for w in action_words if w in rec_blob) / 3)
+
+        # Check if GT drugs are mentioned
+        gt_drugs = []
+        for item in gt["interactions"] + gt["contraindications"]:
+            gt_drugs.extend(_tokenise(item))
+        drug_score = _keyword_score(rec_blob, [d for d in gt_drugs if len(d) > 4], threshold=2)
+
+        return round((action_score * 0.5 + drug_score * 0.5), 3)
+
+    def _score_rationale(self, rationale: str, gt: Dict, patient) -> float:
+        if not rationale or len(rationale.strip()) < 20:
+            return 0.0
+        score = 0.2  # base for any meaningful text
+
+        # Length bonus (deeper explanation)
+        length = len(rationale.split())
+        if length >= 50:  score += 0.2
+        if length >= 100: score += 0.15
+        if length >= 150: score += 0.10
+
+        # Clinical mechanism keywords
+        mech_words = ["cyp", "cyp3a4", "inhibit", "substrate", "clearance",
+                      "metabolism", "auc", "halflife", "bioavailability",
+                      "interaction", "contraindication", "renal", "hepatic",
+                      "rhabdomyolysis", "myopathy", "bleed", "coagulation"]
+        score += _keyword_score(rationale, mech_words, threshold=3) * 0.35
+
+        return round(min(1.0, score), 3)
+
+    def _build_feedback(self, action, gt, cs, errors, scenario) -> str:
+        lines = [
+            "=== MEDICATION SAFETY GRADER FEEDBACK (v2) ===",
+            f"Patient: {scenario['patient'].chief_complaint}",
+            f"GT Severity: {gt['severity']}  |  Proposed: {action.severity_assessment}",
+            "",
+            "Component Scores:",
+        ]
+        for k, v in cs.items():
+            bar = "█" * int(v * 10) + "░" * (10 - int(v * 10))
+            lines.append(f"  {k:35s} {bar}  {v:.3f}")
+        if errors:
+            lines.append("\n⚠️  ERRORS:")
+            for e in errors:
+                lines.append(f"  ✗ {e}")
+        if gt.get("key_findings"):
+            lines.append(f"\n📚 Key Finding: {gt['key_findings']}")
+        return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GRADER 3 — Sepsis Recognition & Management
+# ─────────────────────────────────────────────────────────────────────────────
 
 class SepsisGrader:
     """
-    Grades sepsis recognition and Hour-1 Surviving Sepsis Campaign bundle execution.
-    Time-sensitive elements have higher weight. Missing vasopressors in septic shock
-    is a critical error.
+    9-component sepsis grader implementing SSC 2021 Hour-1 Bundle.
+    Components: diagnosis accuracy, bundle completeness (5 elements),
+    antibiotic allergy safety, vasopressor appropriateness,
+    fluid volume accuracy, rationale clinical depth.
     """
 
-    def grade(
-        self,
-        action: SepsisManagementAction,
-        scenario: Dict[str, Any]
-    ) -> GradeResult:
+    WEIGHTS = {
+        "diagnosis_accuracy":     0.15,
+        "blood_cultures":         0.08,
+        "antibiotics":            0.15,
+        "antibiotic_safety":      0.12,   # allergy cross-check
+        "lactate":                0.08,
+        "fluid_volume":           0.10,
+        "vasopressor":            0.12,
+        "source_control":         0.05,
+        "rationale_depth":        0.15,
+    }
 
-        gt = scenario["ground_truth"]
-        component_scores: Dict[str, float] = {}
-        critical_errors: List[str] = []
+    # qSOFA thresholds for vasopressor indication
+    MAP_THRESHOLD = 65
 
-        # ── Component 1: Correct diagnosis ─────────────────────
-        diagnosis_score = self._score_diagnosis(action.sepsis_diagnosis, gt["diagnosis"])
-        component_scores["diagnosis"] = diagnosis_score
+    def grade(self, action: SepsisManagementAction, scenario: Dict[str, Any]) -> GradeResult:
+        patient    = scenario["patient"]
+        gt         = scenario.get("ground_truth", {})
+        vitals     = patient.vitals
+        allergies  = [a.lower() for a in patient.allergies]
+        cs: Dict[str, float] = {}
+        errors: List[str] = []
 
-        # ── Component 2: Blood cultures before antibiotics ──────
-        # Cultures before antibiotics is critical (don't start abx before cultures)
-        bundle_score, bundle_errors = self._score_bundle(action, gt, scenario)
-        component_scores["bundle_compliance"] = bundle_score
-        critical_errors.extend(bundle_errors)
+        gt_diagnosis = gt.get("diagnosis", "septic_shock")
+        gt_antibiotic = gt.get("antibiotic", "piperacillin_tazobactam")
 
-        # ── Component 3: Antibiotic appropriateness ─────────────
-        abx_score = self._score_antibiotics(action, gt, scenario)
-        component_scores["antibiotic_appropriateness"] = abx_score
-
-        # ── Component 4: Fluid resuscitation ────────────────────
-        fluid_score = self._score_fluids(action, gt, scenario)
-        component_scores["fluid_resuscitation"] = fluid_score
-
-        # ── Component 5: Vasopressor decision ───────────────────
-        vaso_score, vaso_errors = self._score_vasopressors(action, gt, scenario)
-        component_scores["vasopressor_decision"] = vaso_score
-        critical_errors.extend(vaso_errors)
-
-        # ── Component 6: Clinical rationale ─────────────────────
-        rationale_score = self._score_sepsis_rationale(action.clinical_rationale, gt, scenario)
-        component_scores["clinical_rationale"] = rationale_score
-
-        # Weighted final
-        final = (
-            0.20 * diagnosis_score +
-                  0.20 * bundle_score +
-            0.20 * abx_score +
-                    0.15 * fluid_score +
-            0.15 * vaso_score +
-                     0.10 * rationale_score
+        # ── 1. Diagnosis accuracy ────────────────────────────────────────────
+        cs["diagnosis_accuracy"] = self._score_diagnosis(
+            action.sepsis_diagnosis, gt_diagnosis, vitals
         )
-        final = max(0.0, min(1.0, final))
 
-        # Hard penalties for critical errors
-        if critical_errors:
-            final = min(final, 0.4)
+        # ── 2. Blood cultures ────────────────────────────────────────────────
+        cs["blood_cultures"] = 1.0 if action.blood_cultures_ordered else 0.0
+        if not action.blood_cultures_ordered:
+            errors.append(
+                "BUNDLE INCOMPLETE: Blood cultures must be drawn BEFORE antibiotics "
+                "to guide de-escalation therapy."
+            )
 
-        feedback = self._build_feedback(action, gt, component_scores, critical_errors, scenario)
+        # ── 3. Antibiotics ordered ───────────────────────────────────────────
+        cs["antibiotics"] = 1.0 if action.antibiotics_ordered else 0.0
+        if not action.antibiotics_ordered:
+            errors.append("BUNDLE INCOMPLETE: Broad-spectrum antibiotics must be given within 1 hour of sepsis recognition.")
+
+        # ── 4. Antibiotic allergy safety ─────────────────────────────────────
+        cs["antibiotic_safety"], allergy_error = self._score_antibiotic_safety(
+            action.antibiotic_choice, allergies, gt_antibiotic
+        )
+        if allergy_error:
+            errors.append(allergy_error)
+
+        # ── 5. Lactate ordered ───────────────────────────────────────────────
+        cs["lactate"] = 1.0 if action.lactate_ordered else 0.0
+        if not action.lactate_ordered:
+            errors.append("BUNDLE INCOMPLETE: Serum lactate is required to stratify sepsis severity (lactate ≥4 indicates tissue hypoperfusion).")
+
+        # ── 6. Fluid volume ──────────────────────────────────────────────────
+        cs["fluid_volume"] = self._score_fluid_volume(
+            action.iv_fluid_bolus_ml, vitals, gt
+        )
+
+        # ── 7. Vasopressor decision ──────────────────────────────────────────
+        map_mmhg = int((vitals.systolic_bp + 2 * vitals.diastolic_bp) / 3)
+        requires_vasopressor = map_mmhg < self.MAP_THRESHOLD
+        cs["vasopressor"] = self._score_vasopressor(
+            action.vasopressor_ordered,
+            action.vasopressor_choice,
+            requires_vasopressor,
+            allergies
+        )
+        if requires_vasopressor and not action.vasopressor_ordered:
+            errors.append(
+                f"BUNDLE INCOMPLETE: MAP={map_mmhg} mmHg (below 65 threshold). "
+                "Vasopressors (norepinephrine first-line) should be initiated."
+            )
+
+        # ── 8. Source control ────────────────────────────────────────────────
+        gt_source = gt.get("source", "")
+        if gt_source and action.source_control_identified:
+            sim = _token_overlap(action.source_control_identified, gt_source)
+            cs["source_control"] = min(1.0, sim * 2 + 0.3)
+        elif not gt_source:
+            cs["source_control"] = 1.0  # source unclear — full credit
+        else:
+            cs["source_control"] = 0.0
+
+        # ── 9. Rationale depth ───────────────────────────────────────────────
+        cs["rationale_depth"] = self._score_sepsis_rationale(
+            action.clinical_rationale, vitals, action
+        )
+
+        # ── Time-to-antibiotics bonus ────────────────────────────────────────
+        tta_bonus = 0.0
+        if action.time_to_antibiotics_minutes is not None:
+            if action.time_to_antibiotics_minutes <= 30:   tta_bonus = 0.03
+            elif action.time_to_antibiotics_minutes <= 60: tta_bonus = 0.01
+            elif action.time_to_antibiotics_minutes > 120: tta_bonus = -0.02
+
+        # ── Weighted final ───────────────────────────────────────────────────
+        final = sum(self.WEIGHTS[k] * cs[k] for k in self.WEIGHTS) + tta_bonus
+        final = round(max(0.0, min(1.0, final)), 4)
+
+        confidence = (
+            "high"   if len(errors) == 0 and final >= 0.75 else
+            "medium" if len(errors) <= 1 and final >= 0.50 else
+            "low"
+        )
 
         return GradeResult(
-                       score=round(final, 3),
-            component_scores=component_scores,
-                       feedback=feedback,
-            critical_errors=critical_errors,
-                     passed=(final >= 0.6 and not critical_errors)
+            score=final,
+            component_scores=cs,
+            feedback=self._build_feedback(action, cs, errors, scenario, map_mmhg),
+            critical_errors=errors,
+            passed=(final >= 0.60 and not [e for e in errors if "BUNDLE INCOMPLETE" in e]),
+            confidence=confidence,
+            teaching_point=gt.get("teaching_point", ""),
         )
 
-    def _score_diagnosis(self, proposed: str, gt: str) -> float:
-        diagnosis_scores = {
-            ("septic_shock", "septic_shock"): 1.0,
-            ("sepsis", "sepsis"): 1.0,
-                       ("SIRS_only", "SIRS_only"): 1.0,
-                            ("no_sepsis", "no_sepsis"): 1.0,
-            ("sepsis", "septic_shock"): 0.5,      # Underdiagnosed severity
-            ("septic_shock", "sepsis"): 0.7,       # Overdiagnosed but safer error
-            ("SIRS_only", "sepsis"): 0.3,
-       ("SIRS_only", "septic_shock"): 0.1,
-            ("no_sepsis", "sepsis"): 0.0,
-       ("no_sepsis", "septic_shock"): 0.0,
+    def _score_diagnosis(self, proposed: str, gt: str, vitals) -> float:
+        """Partial credit for diagnosis — spectrum: SIRS → sepsis → septic_shock."""
+        diagnosis_order = ["no_sepsis", "SIRS_only", "sepsis", "septic_shock"]
+        p_idx = next((i for i, d in enumerate(diagnosis_order)
+                      if d.lower() == proposed.lower()), -1)
+        g_idx = next((i for i, d in enumerate(diagnosis_order)
+                      if d.lower() == gt.lower()), -1)
+        if p_idx < 0 or g_idx < 0:
+            return 0.3
+        diff = abs(p_idx - g_idx)
+        return {0: 1.0, 1: 0.55, 2: 0.20, 3: 0.0}.get(diff, 0.0)
+
+    def _score_antibiotic_safety(
+        self, choice: Optional[str], allergies: List[str], gt_antibiotic: str
+    ) -> Tuple[float, str]:
+        """
+        Cross-checks antibiotic choice against documented allergies.
+        Returns (score, error_message_or_empty).
+        """
+        if not choice:
+            return 0.0, ""
+
+        choice_l = choice.lower().replace("_", " ").replace("-", " ")
+
+        # Define dangerous cross-reactivities
+        CONTRAINDICATED = {
+            "penicillin":   ["penicillin", "amoxicillin", "ampicillin",
+                             "piperacillin tazobactam", "piperacillin"],
+            "vancomycin":   ["vancomycin"],
+            "cephalosporin":["ceftriaxone", "cefazolin", "cefepime",
+                             "cefuroxime", "cephalosporin"],
+            "sulfa":        ["trimethoprim sulfamethoxazole", "sulfamethoxazole"],
         }
-        return diagnosis_scores.get((proposed, gt), 0.2)
 
-    def _score_bundle(self, action: SepsisManagementAction, gt: Dict, scenario: Dict):
-        errors = []
-        score = 0.0
-        bundle_gt = gt["bundle"]
+        for allergy in allergies:
+            for key, drugs in CONTRAINDICATED.items():
+                if key in allergy:
+                    for drug in drugs:
+                        if drug in choice_l:
+                            return 0.0, (
+                                f"ALLERGY VIOLATION: Patient has documented {allergy} allergy. "
+                                f"Prescribed '{choice}' is contraindicated. "
+                                f"Use a safe alternative (e.g., vancomycin for MRSA if no vanco allergy, "
+                                f"meropenem or daptomycin for pen-allergic patients)."
+                            )
 
-        # Blood cultures
-        if action.blood_cultures_ordered:
-            score += 0.3
-        elif bundle_gt["blood_cultures"]:
-            errors.append("CRITICAL: Blood cultures should be drawn before antibiotics.")
+        # Score the choice quality vs ground truth
+        gt_score = _token_overlap(choice_l, gt_antibiotic.lower().replace("_", " "))
+        return round(0.4 + gt_score * 0.6, 3), ""
 
-        # Antibiotics ordered
-        if action.antibiotics_ordered:
-            score += 0.4
-        elif bundle_gt["antibiotics"]:
-            errors.append("CRITICAL: Antibiotics not ordered. Time to antibiotics is the #1 mortality predictor in sepsis.")
+    def _score_fluid_volume(self, bolus_ml: int, vitals, gt: Dict) -> float:
+        """30ml/kg is the SSC standard. Penalise under- and over-resuscitation."""
+        # Estimate expected volume (assume 70kg average)
+        expected_ml = 2100  # 30 ml/kg × 70 kg
+        gt_ml = gt.get("expected_fluid_ml", expected_ml)
 
-        # Lactate ordered
-        if action.lactate_ordered:
-            score += 0.3
-        return min(1.0, score), errors
+        map_mmhg = int((vitals.systolic_bp + 2 * vitals.diastolic_bp) / 3)
+        requires_fluids = (map_mmhg < 65 or
+                           getattr(vitals, "lactate", 0) >= 4)
 
-    def _score_antibiotics(self, action: SepsisManagementAction, gt: Dict, scenario: Dict):
-        if not action.antibiotics_ordered:
-            return 0.0
-        if not action.antibiotic_choice:
-            return 0.3  # Ordered but no choice specified
-
-        choice = action.antibiotic_choice.lower()
-        expected = gt["bundle"]["antibiotic_choice"].lower()
-
-        # Check allergies
-        allergies = [a.lower() for a in scenario["patient"].allergies]
-        allergy_violations = []
-
-        # Map allergy keywords to drug class
-        if "penicillin" in allergies:
-            forbidden = ["ampicillin", "amoxicillin", "piperacillin", "oxacillin"]
-            for f in forbidden:
-                if f in choice:
-                    allergy_violations.append(f"Used {f} in penicillin-allergic patient!")
-
-        if "vancomycin" in allergies:
-            if "vancomycin" in choice:
-                allergy_violations.append("Used vancomycin in vancomycin-allergic patient (red man syndrome)!")
-
-        if allergy_violations:
-            return 0.0  # Hard fail for allergy violation
-
-        # Score antibiotic choice
-        expected_words = re.split(r'[_\+\s]', expected)
-        choice_words = re.split(r'[_\+\s]', choice)
-        matches = sum(1 for w in expected_words if any(w in c for c in choice_words))
-        score = matches / max(1, len(expected_words))
-
-        # Reward broad-spectrum for severe sepsis/shock
-        broad_spectrum = ["meropenem", "piperacillin_tazobactam", "cefepime", "vancomycin",
-                          "imipenem", "ceftriaxone", "ciprofloxacin"]
-        if any(b in choice for b in broad_spectrum) and gt["diagnosis"] in ["sepsis", "septic_shock"]:
-            score = max(score, 0.6)
-
-        return min(1.0, score)
-
-    def _score_fluids(self, action: SepsisManagementAction, gt: Dict, scenario: Dict):
-        if gt["diagnosis"] == "no_sepsis":
-            if action.iv_fluid_bolus_ml == 0:
+        if not requires_fluids:
+            # Still reasonable to give some fluids, but not mandatory
+            if bolus_ml == 0:
                 return 1.0
-            return 0.8
+            if bolus_ml <= 1000:
+                return 0.8
+            return 0.6
 
-        # Calculate expected fluid based on weight (estimated)
-        patient_age = scenario["patient"].age
-        # Rough weight estimate: 70kg default
-        estimated_weight = 70
-        expected_fluids = estimated_weight * 30  # 30mL/kg = 2100mL
+        if bolus_ml == 0:
+            return 0.0  # failed to give fluids despite indication
 
-        gt_vasopressors = gt["bundle"].get("vasopressors", False)
-        if gt_vasopressors and action.iv_fluid_bolus_ml == 0:
-            return 0.2  # Septic shock needs fluids
+        # Partial credit based on % of target
+        ratio = bolus_ml / gt_ml
+        if   0.80 <= ratio <= 1.20: return 1.0
+        elif 0.60 <= ratio <  0.80: return 0.75
+        elif 0.40 <= ratio <  0.60: return 0.50
+        elif 1.20 <  ratio <= 1.60: return 0.70  # mild over-resuscitation
+        elif ratio > 1.60:          return 0.40  # over-resuscitation risk
+        else:                       return 0.20  # severely inadequate
 
-        if action.iv_fluid_bolus_ml <= 0:
-            return 0.1
+    def _score_vasopressor(self, ordered: bool, choice: Optional[str],
+                            required: bool, allergies: List[str]) -> float:
+        if not required:
+            return 1.0 if not ordered else 0.6  # not indicated, but mild penalty if given anyway
 
-        ratio = action.iv_fluid_bolus_ml / expected_fluids
-        if 0.6 <= ratio <= 1.5:
+        if not ordered:
+            return 0.0  # required but not given — covered by error above
+
+        if not choice:
+            return 0.5  # ordered but no specific choice — partial credit
+
+        choice_l = choice.lower().replace("_", " ")
+        # Norepinephrine is first-line per SSC
+        if "norepinephrine" in choice_l or "noradrenaline" in choice_l:
             return 1.0
-        elif 0.4 <= ratio < 0.6:
-            return 0.7
-        elif 1.5 < ratio <= 2.0:
-            return 0.8  # More is ok in shock
-        elif ratio > 2.0:
-            return 0.5  # Excessive fluids risk
-        return 0.4
+        # Vasopressin is acceptable as adjunct
+        if "vasopressin" in choice_l:
+            return 0.75
+        # Epinephrine / dopamine — acceptable if NE contraindicated
+        if any(x in choice_l for x in ["epinephrine", "adrenaline", "dopamine"]):
+            return 0.60
+        # Phenylephrine — weak, not recommended for septic shock
+        if "phenylephrine" in choice_l:
+            return 0.30
+        return 0.40
 
-    def _score_vasopressors(self, action: SepsisManagementAction, gt: Dict, scenario: Dict):
-        errors = []
-        needs_vaso = gt["bundle"].get("vasopressors", False)
-
-        if needs_vaso and not action.vasopressor_ordered:
-            errors.append("CRITICAL: Septic shock (MAP<65 despite fluids) requires vasopressors. Norepinephrine is first-line.")
-            return 0.1, errors
-
-        if not needs_vaso and action.vasopressor_ordered:
-            # Ordered when not needed - minor error
-            return 0.6, []
-
-        if needs_vaso and action.vasopressor_ordered:
-            score = 0.7  # Correct decision
-            if action.vasopressor_choice:
-                choice = action.vasopressor_choice.lower()
-                if "norepinephrine" in choice or "noradrenaline" in choice:
-                    score = 1.0  # First-line
-                elif "vasopressin" in choice or "epinephrine" in choice:
-                    score = 0.85  # Acceptable second-line
-                elif "dopamine" in choice:
-                    score = 0.6  # No longer first-line (arrhythmia risk)
-            return score, []
-
-        return 1.0, []  # No vasopressors needed and not ordered
-
-    def _score_sepsis_rationale(self, rationale: str, gt: Dict, scenario: Dict):
+    def _score_sepsis_rationale(
+        self, rationale: str, vitals, action: SepsisManagementAction
+    ) -> float:
         if not rationale or len(rationale.strip()) < 20:
             return 0.0
-
         score = 0.2
-        r = rationale.lower()
 
-        # Check for sepsis-specific terminology
-        sepsis_terms = ["sepsis", "sirs", "qsofa", "sofa", "lactate", "fluid", "antibiotic",
-                        "blood culture", "organ", "shock", "map", "vasopressor"]
-        found = sum(1 for t in sepsis_terms if t in r)
-        score += 0.4 * min(1.0, found / 4)
+        length = len(rationale.split())
+        if length >= 50:  score += 0.2
+        if length >= 100: score += 0.15
 
-        # Key finding keywords
-        key_words = gt.get("key_note", "").lower().split()
-        key_words = [w for w in key_words if len(w) > 4][:15]
-        found_key = sum(1 for w in key_words if w in r)
-        score += 0.4 * min(1.0, found_key / max(1, min(8, len(key_words))))
+        clinical_kws = [
+            "sepsis", "bundle", "ssc", "sofa", "qsofa", "lactate", "map",
+            "crystalloid", "fluid", "antibiotic", "cultures", "vasopressor",
+            "norepinephrine", "hypotension", "organ", "perfusion", "infection",
+            "source", "control", "hour", "mortality"
+        ]
+        score += _keyword_score(rationale, clinical_kws, threshold=4) * 0.45
 
-        return min(1.0, score)
+        return round(min(1.0, score), 3)
 
-    def _build_feedback(self, action, gt, components, errors, scenario):
+    def _build_feedback(self, action, cs, errors, scenario, map_mmhg: int) -> str:
+        p = scenario["patient"]
         lines = [
-            "=== SEPSIS MANAGEMENT GRADER FEEDBACK ===",
-            f"Patient: {scenario['patient'].chief_complaint}",
-            f"Your diagnosis: {action.sepsis_diagnosis} | Correct: {gt['diagnosis']}",
+            "=== SEPSIS GRADER FEEDBACK (v2) ===",
+            f"Patient: {p.chief_complaint}",
+            f"MAP: {map_mmhg} mmHg  |  Diagnosis: {action.sepsis_diagnosis}",
+            f"Antibiotics: {action.antibiotic_choice or 'none'}  "
+            f"|  Fluids: {action.iv_fluid_bolus_ml}mL  "
+            f"|  Vasopressors: {'YES' if action.vasopressor_ordered else 'NO'}",
+            "",
+            "SSC Hour-1 Bundle Completion:",
+            f"  {'✅' if action.blood_cultures_ordered else '❌'} Blood cultures before antibiotics",
+            f"  {'✅' if action.antibiotics_ordered      else '❌'} Broad-spectrum antibiotics",
+            f"  {'✅' if action.lactate_ordered           else '❌'} Serum lactate",
+            f"  {'✅' if action.iv_fluid_bolus_ml > 0    else '❌'} IV fluid bolus",
+            f"  {'✅' if action.vasopressor_ordered       else ('N/A' if map_mmhg >= 65 else '❌')} Vasopressors (MAP={map_mmhg})",
             "",
             "Component Scores:",
-            f"  Diagnosis:               {components['diagnosis']:.2f}",
-            f"  Bundle Compliance:       {components['bundle_compliance']:.2f}",
-            f"  Antibiotic Choice:       {components['antibiotic_appropriateness']:.2f}",
-            f"  Fluid Resuscitation:     {components['fluid_resuscitation']:.2f}",
-            f"  Vasopressor Decision:    {components['vasopressor_decision']:.2f}",
-            f"  Clinical Rationale:      {components['clinical_rationale']:.2f}",
         ]
+        for k, v in cs.items():
+            bar = "█" * int(v * 10) + "░" * (10 - int(v * 10))
+            lines.append(f"  {k:35s} {bar}  {v:.3f}")
         if errors:
-            lines.append("\n⚠️  CRITICAL ERRORS:")
+            lines.append("\n⚠️  ERRORS:")
             for e in errors:
-                lines.append(f"  - {e}")
-        lines.append(f"\nKey Clinical Note: {gt.get('key_note', 'N/A')}")
+                lines.append(f"  ✗ {e}")
+        tp = scenario.get("ground_truth", {}).get("teaching_point", "")
+        if tp:
+            lines.append(f"\n📚 Teaching Point: {tp}")
         return "\n".join(lines)
