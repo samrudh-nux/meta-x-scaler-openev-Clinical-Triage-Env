@@ -1,0 +1,138 @@
+name: clinical-triage-env
+version: "1.0.0"
+description: >
+  Healthcare AI training environment for clinical decision-making agents.
+  Simulates three real-world clinical tasks: Emergency Department Triage
+  (ESI Level Assignment), Medication Safety Review (drug interaction detection),
+  and Sepsis Recognition & Management (Hour-1 SSC bundle execution).
+  All scenarios are medically accurate with programmatic graders producing
+  partial-credit scores (0.0–1.0).
+author: "ClinicalTriageEnv Contributors"
+license: "MIT"
+tags:
+  - healthcare
+  - clinical-decision-support
+  - triage
+  - medication-safety
+  - sepsis
+  - openenv
+  - rl-training
+  - agentic-ai
+
+# OpenEnv spec compliance
+openenv_spec: "0.1"
+
+# Task definitions
+tasks:
+  - id: triage_easy
+    name: "Emergency Triage - Easy"
+    type: triage
+    difficulty: easy
+    description: "Assign ESI level to non-urgent patient. Validates basic triage understanding."
+
+  - id: triage_medium
+    name: "Emergency Triage - Medium"
+    type: triage
+    difficulty: medium
+    description: "Triage potential ACS patient. Requires recognition of high-risk chest pain presentation."
+
+  - id: triage_hard
+    name: "Emergency Triage - Hard"
+    type: triage
+    difficulty: hard
+    description: "Triage acute stroke on anticoagulation. Time-critical with complex decision-making."
+
+  - id: med_safety_easy
+    name: "Medication Safety Review - Easy"
+    type: medication_safety
+    difficulty: easy
+    description: "Review clean medication list. Validates ability to correctly identify safe regimens."
+
+  - id: med_safety_medium
+    name: "Medication Safety Review - Medium"
+    type: medication_safety
+    difficulty: medium
+    description: "Triple antithrombotic therapy review post-MI with CKD and diabetes."
+
+  - id: med_safety_hard
+    name: "Medication Safety Review - Hard"
+    type: medication_safety
+    difficulty: hard
+    description: "HIV PI + statin rhabdomyolysis. Life-threatening CYP3A4 interaction identification."
+
+  - id: sepsis_easy
+    name: "Sepsis Management - Easy"
+    type: sepsis
+    difficulty: easy
+    description: "Urosepsis with PCN allergy. Standard Hour-1 bundle with allergy-appropriate antibiotics."
+
+  - id: sepsis_medium
+    name: "Sepsis Management - Medium"
+    type: sepsis
+    difficulty: medium
+    description: "Septic shock in elderly patient with MRSA history. Vasopressor decision-making required."
+
+  - id: sepsis_hard
+    name: "Sepsis Management - Hard"
+    type: sepsis
+    difficulty: hard
+    description: "Post-op anastomotic leak with multi-organ failure, DIC, and vancomycin allergy."
+
+# API interface
+action_space:
+  type: pydantic
+  classes:
+    - TriageAction
+    - MedicationSafetyAction
+    - SepsisManagementAction
+
+observation_space:
+  type: pydantic
+  classes:
+    - TriageObservation
+    - MedicationSafetyObservation
+    - SepsisManagementObservation
+
+reward:
+  type: continuous
+        range: [-1.0, 1.5]
+      description: >
+    Shaped reward = (grade_score - safety_penalty + efficiency_bonus) * difficulty_multiplier.
+    Partial credit throughout episode. Critical safety errors penalized.
+# Environment boundaries
+episode:
+  max_steps: 3
+  terminates_on_action: true
+      reset_required: true
+
+# Infrastructure
+server:
+  framework: fastapi
+  host: "0.0.0.0"
+  port: 7860
+  endpoints:
+    reset: POST /reset
+        step: POST /step
+     state: GET /state
+           tasks: GET /tasks
+       health: GET /health
+  websocket: WS /ws
+
+docker:
+  base_image: "python:3.11-slim"
+  exposed_port: 7860
+
+# Baseline scores (from inference.py run)
+baseline:
+  model: "meta-llama/Llama-3.3-70B-Instruct"
+  scores:
+    triage_easy: 0.68
+         triage_medium: 0.62
+                   triage_hard: 0.45
+                        med_safety_easy: 0.90
+                            med_safety_medium: 0.58
+                      med_safety_hard: 0.31
+                  sepsis_easy: 0.64
+               sepsis_medium: 0.55
+           sepsis_hard: 0.28
+  overall_mean: 0.58
