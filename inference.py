@@ -1,500 +1,549 @@
-"""
-inference.py — ClinicalTriageEnv Baseline Inference Script
-===========================================================
-Runs an LLM agent against all 9 tasks (3 difficulty levels × 3 task types)
-and reports reproducible baseline scores.
-Environment variables required:
-  API_BASE_URL - LLM API endpoint (default: https://router.huggingface.co/v1)
-  MODEL_NAME  - Model identifier for inference
-  HF_TOKEN - Hugging Face / API key
-Usage:
-  python inference.py
-  python inference.py --tasks triage_easy triage_medium sepsis_hard
-  python inference.py --output results.json
-  (shin )
-"""
-
+from __future__ import annotations
 import os
 import sys
 import json
 import time
 import argparse
-from typing import Any, Dict, List, Optional
-from datetime import datetime
+import csv
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
 
-  from openai import OpenAI
+from openai import OpenAI
 
-       # Add parent directory to path for local imports
-                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from environment import ClinicalTriageEnv, TASK_REGISTRY
-               from models import (
-    TriageAction, MedicationSafetyAction, SepsisManagementAction
-)
+from models import TriageAction, MedicationSafetyAction, SepsisManagementAction
 
-# 
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Configuration
-# 
+# ─────────────────────────────────────────────────────────────────────────────
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-               API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "")
-      MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
+API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "")
+MODEL_NAME   = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
+USE_COT      = os.getenv("USE_COT", "true").lower() == "true"
+MAX_RETRIES  = 3
+MAX_TOKENS   = 1400  # increased for CoT
 
-TEMPERATURE = 0.1  # Low temp for reproducible results
-MAX_TOKENS = 1200
-MAX_RETRIES = 3
+TEMPERATURE_BY_DIFFICULTY = {
+    "easy":   0.05,
+    "medium": 0.08,
+    "hard":   0.10,
+}
 
-# All 9 tasks ordered by difficulty
 ALL_TASKS = [
-    "triage_easy",
-    "triage_medium",
-    "triage_hard",
-    "med_safety_easy",
-    "med_safety_medium",
-    "med_safety_hard",
-    "sepsis_easy",
-    "sepsis_medium",
-    "sepsis_hard",
+    "triage_easy", "triage_medium", "triage_hard",
+    "med_safety_easy", "med_safety_medium", "med_safety_hard",
+    "sepsis_easy", "sepsis_medium", "sepsis_hard",
 ]
 
 
-#
-# LLM Client
-# 
+# ─────────────────────────────────────────────────────────────────────────────
+# System prompts (domain-specific)
+# ─────────────────────────────────────────────────────────────────────────────
+
+SYSTEM_PROMPTS = {
+    "triage": """You are a board-certified emergency physician with 15+ years of triage experience.
+You follow the Emergency Severity Index (ESI) v4 algorithm precisely.
+KEY RULES:
+  - ESI-1: Any immediate life-saving intervention needed (airway, resuscitation)
+  - ESI-2: High-risk situation OR severe pain/distress OR vital sign abnormality
+  - Never assign ESI ≥ 3 to a patient with suspected STEMI, stroke, or septic shock
+  - Undertriage (assigning too-high ESI number) is more dangerous than overtriage
+When responding, first THINK through the case, then output ONLY a valid JSON object.""",
+
+    "medication_safety": """You are a clinical pharmacist and medication safety specialist.
+You are expert in:
+  - CYP450 drug metabolism (especially 3A4, 2C9, 2C19, 2D6)
+  - Anticoagulation management and bleeding risks
+  - Renal/hepatic dose adjustments
+  - HIV antiretroviral drug interactions (ritonavir, cobicistat boosting)
+  - Statin safety (myopathy, rhabdomyolysis)
+  - Triple antithrombotic therapy risks
+When responding, first THINK through each drug pair, then output ONLY a valid JSON object.""",
+
+    "sepsis": """You are an intensivist and sepsis specialist following SSC 2021 guidelines.
+KEY RULES:
+  - Hour-1 bundle: cultures → antibiotics → lactate → fluids → vasopressors if MAP<65
+  - Septic shock = sepsis + vasopressors needed + lactate >2 mmol/L despite fluids
+  - ALWAYS check allergy history before selecting antibiotics
+  - Norepinephrine is FIRST-LINE vasopressor
+  - Blood cultures MUST be drawn BEFORE antibiotics (if <45 min delay)
+  - 30 mL/kg crystalloid for MAP<65 or lactate ≥ 4 mmol/L
+When responding, first THINK through the bundle checklist, then output ONLY a valid JSON object.""",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM client
+# ─────────────────────────────────────────────────────────────────────────────
 
 def get_client() -> OpenAI:
-    return OpenAI(
-        base_url=API_BASE_URL,
-        api_key=API_KEY or "dummy-key",
-    )
+    return OpenAI(base_url=API_BASE_URL, api_key=API_KEY or "dummy-key")
 
 
-def call_llm(client: OpenAI, prompt: str, system: str = "") -> str:
-    """Call LLM with retry logic."""
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
+def call_llm(
+    client: OpenAI,
+    messages: List[Dict[str, str]],
+    temperature: float = 0.05,
+) -> str:
+    """Call LLM with retry and exponential backoff."""
     for attempt in range(MAX_RETRIES):
         try:
             response = client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=messages,
-                temperature=TEMPERATURE,
+                temperature=temperature,
                 max_tokens=MAX_TOKENS,
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
+            wait = 2 ** attempt
             if attempt < MAX_RETRIES - 1:
-                time.sleep(2 ** attempt)
+                print(f"    ⟳ Retry {attempt+1}/{MAX_RETRIES} after {wait}s ({e})")
+                time.sleep(wait)
             else:
-                print(f"  ⚠ LLM call failed after {MAX_RETRIES} attempts: {e}")
-                return ""
+                print(f"    ✗ LLM call failed after {MAX_RETRIES} attempts: {e}")
     return ""
 
 
-# 
-# Task-specific prompts and action parsers
-# 
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompt builders
+# ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are a highly experienced clinical AI assistant with expertise in emergency medicine, pharmacology, and critical care.
-You will be given a clinical scenario and must respond with a JSON object matching the required action format.
-CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanation, just JSON.
-Your responses will be evaluated for medical accuracy and patient safety."""
+def _vitals_block(v) -> str:
+    map_val = int((v.systolic_bp + 2 * v.diastolic_bp) / 3)
+    return (
+        f"HR {v.heart_rate} bpm | BP {v.systolic_bp}/{v.diastolic_bp} mmHg "
+        f"(MAP {map_val}) | SpO2 {v.spo2}% | Temp {v.temperature}°C | "
+        f"RR {v.respiratory_rate}/min | GCS {v.glasgow_coma_scale}/15"
+    )
 
 
-def build_triage_prompt(obs) -> str:
-    p = obs.patient
-    v = p.vitals
-    return f"""## EMERGENCY DEPARTMENT TRIAGE TASK
-               **Task**: {obs.task_description}
-                 **Patient Record**:
-- Patient ID: {p.patient_id}
-- Age/Sex: {p.age}y {p.sex}
-- Chief Complaint: {p.chief_complaint}
-**Vital Signs**:
-- Heart Rate: {v.heart_rate} bpm
-- Blood Pressure: {v.systolic_bp}/{v.diastolic_bp} mmHg
-            - Temperature: {v.temperature}°C
-- SpO2: {v.spo2}%
-- Respiratory Rate: {v.respiratory_rate}/min
-- GCS: {v.glasgow_coma_scale}/15
-**Symptoms**: {', '.join(p.symptoms)}
-**Medical History**: {', '.join(p.medical_history)}
-**Current Medications**: {', '.join([f"{m.name} {m.dose_mg}mg {m.frequency}" for m in p.current_medications]) or 'None'}
-**Allergies**: {', '.join(p.allergies) or 'NKDA'}
-**Lab Results**: {json.dumps(p.lab_results) if p.lab_results else 'Pending'}
-**ESI Scale Reference**:
-- ESI-1: Requires immediate life-saving intervention
-- ESI-2: High risk situation, severe pain, or vital sign abnormality
-- ESI-3: Stable, requires 2+ resources (labs, imaging, IV)
-- ESI-4: Stable, requires 1 resource
-- ESI-5: No resources needed
-Respond with JSON:
+def build_triage_prompt(obs, use_cot: bool) -> str:
+    p, v = obs.patient, obs.patient.vitals
+    meds = ", ".join(f"{m.name} {m.dose_mg}mg" for m in p.current_medications) or "None"
+    cot_instruction = (
+        "\n\nSTEP 1 — Think through the case (3-5 sentences covering vital signs, "
+        "chief complaint, and ESI decision). Label this section 'REASONING:'.\n"
+        "STEP 2 — Output ONLY a JSON object. Label it 'ACTION:'.\n"
+        "Example format:\nREASONING: The patient presents with...\nACTION: {\"esi_level\": ...}"
+        if use_cot else
+        "\n\nRespond ONLY with a valid JSON object."
+    )
+    return f"""## EMERGENCY TRIAGE TASK — {obs.task_description[:80]}
+**Patient**: {p.age}yo {p.sex} | ID: {p.patient_id}
+**Chief Complaint**: {p.chief_complaint}
+**Vitals**: {_vitals_block(v)}
+**Symptoms**: {", ".join(p.symptoms)}
+**Medical History**: {", ".join(p.medical_history)}
+**Medications**: {meds}
+**Allergies**: {", ".join(p.allergies) or "NKDA"}
+**Labs**: {json.dumps(p.lab_results) if p.lab_results else "Pending"}
+ESI Reference: 1=Resuscitation | 2=Emergent | 3=Urgent | 4=Less Urgent | 5=Non-Urgent
+{cot_instruction}
+JSON schema:
 {{
-  "esi_level": <1-5>,
-  "rationale": "<clinical reasoning, minimum 30 words>",
-  "recommended_immediate_interventions": ["<intervention1>", "<intervention2>"]
+  "esi_level": <int 1-5>,
+  "rationale": "<clinical reasoning, min 30 words>",
+  "recommended_immediate_interventions": ["<action>", ...]
 }}"""
 
 
-def build_med_safety_prompt(obs) -> str:
+def build_med_safety_prompt(obs, use_cot: bool) -> str:
     p = obs.patient
-    meds_str = "\n".join([
-        f"  - {m.name}: {m.dose_mg}mg {m.frequency} ({m.route})"
+    meds = "\n".join(
+        f"  • {m.name} {m.dose_mg}mg {m.frequency} ({m.route})"
         for m in p.current_medications
-    ])
-    labs_str = json.dumps(p.lab_results, indent=2) if p.lab_results else "No labs"
-
-    drug_info_str = ""
-    if obs.available_drug_info:
-        drug_info_str = f"\n**Drug Reference Information**:\n{json.dumps(obs.available_drug_info, indent=2)}"
-
-    return f"""## MEDICATION SAFETY REVIEW TASK
-**Task**: {obs.task_description}
-**Patient**:
-- Age/Sex: {p.age}y {p.sex}
-- Medical History: {', '.join(p.medical_history)}
-- Allergies: {', '.join(p.allergies) or 'NKDA'}
+    )
+    drug_info = (
+        f"\n**Drug Reference**:\n{json.dumps(obs.available_drug_info, indent=2)}"
+        if obs.available_drug_info else ""
+    )
+    cot_instruction = (
+        "\n\nSTEP 1 — Systematically review each drug pair for interactions (label 'REASONING:').\n"
+        "STEP 2 — Output ONLY a JSON object (label 'ACTION:')."
+        if use_cot else
+        "\n\nRespond ONLY with a valid JSON object."
+    )
+    return f"""## MEDICATION SAFETY REVIEW
+**Patient**: {p.age}yo {p.sex} | History: {", ".join(p.medical_history)}
+**Allergies**: {", ".join(p.allergies) or "NKDA"}
+**Chief Complaint**: {p.chief_complaint}
 **Current Medications**:
-{meds_str}
-**Laboratory Results**:
-{labs_str}
-**Chief Complaint/Context**: {p.chief_complaint}
-{drug_info_str}
-**Severity Scale**: safe < minor < moderate < major < critical
-Respond with JSON:
+{meds}
+**Labs**: {json.dumps(p.lab_results, indent=2) if p.lab_results else "None"}
+{drug_info}
+Severity scale: safe < minor < moderate < major < critical
+{cot_instruction}
+JSON schema:
 {{
-  "flagged_interactions": ["<drug1+drug2: mechanism/risk>"],
-  "flagged_contraindications": ["<drug_condition: reason>"],
-  "flagged_dosing_errors": ["<drug_dose_error: correction>"],
-  "recommended_changes": ["<specific change>"],
+  "flagged_interactions": ["<drug+drug: mechanism/risk>", ...],
+  "flagged_contraindications": ["<drug_condition: reason>", ...],
+  "flagged_dosing_errors": ["<drug: error and correction>", ...],
+  "recommended_changes": ["<specific actionable change>", ...],
   "severity_assessment": "<safe|minor|moderate|major|critical>",
-  "clinical_rationale": "<detailed clinical explanation, minimum 50 words>"
+  "clinical_rationale": "<detailed explanation, min 50 words>"
 }}"""
 
 
-def build_sepsis_prompt(obs) -> str:
-    p = obs.patient
-    v = p.vitals
-    labs = json.dumps(p.lab_results, indent=2) if p.lab_results else "Pending"
-    meds = ", ".join([f"{m.name} {m.dose_mg}mg" for m in p.current_medications]) or "None"
-
-    return f"""## SEPSIS RECOGNITION & MANAGEMENT TASK
-**Task**: {obs.task_description}
-**Patient**:
-- Age/Sex: {p.age}y {p.sex}
-- Chief Complaint: {p.chief_complaint}
-- Allergies: {', '.join(p.allergies) or 'NKDA'}
-- Medical History: {', '.join(p.medical_history)}
-- Current Medications: {meds}
-**Vital Signs**:
-- HR: {v.heart_rate}, BP: {v.systolic_bp}/{v.diastolic_bp}, Temp: {v.temperature}°C
-- SpO2: {v.spo2}%, RR: {v.respiratory_rate}, GCS: {v.glasgow_coma_scale}/15
-- MAP: {int((v.systolic_bp + 2*v.diastolic_bp)/3)} mmHg
-**qSOFA Score (pre-calculated)**: {obs.qsofa_score}/3
-- (RR≥22: 1pt, altered mentation GCS<15: 1pt, SBP≤100: 1pt)
-**Laboratory Results**:
-{labs}
-**Time elapsed**: {obs.time_elapsed_minutes} minutes since arrival
-**Sepsis Definitions (Sepsis-3)**:
-- Sepsis: Life-threatening organ dysfunction from infection (SOFA≥2)
-- Septic Shock: Sepsis + vasopressors needed + lactate>2 despite fluids
-**Hour-1 SSC Bundle (complete ALL applicable)**:
-1. Blood cultures BEFORE antibiotics
-2. Broad-spectrum antibiotics within 1 hour
-3. Lactate measurement (repeat if >2)
-4. 30mL/kg crystalloid if hypotension or lactate≥4
-5. Vasopressors if MAP<65 despite fluids
-Respond with JSON:
+def build_sepsis_prompt(obs, use_cot: bool) -> str:
+    p, v = obs.patient, obs.patient.vitals
+    map_val = int((v.systolic_bp + 2 * v.diastolic_bp) / 3)
+    meds = ", ".join(f"{m.name} {m.dose_mg}mg" for m in p.current_medications) or "None"
+    cot_instruction = (
+        "\n\nSTEP 1 — Check each bundle element and allergy profile (label 'REASONING:').\n"
+        "STEP 2 — Output ONLY a JSON object (label 'ACTION:')."
+        if use_cot else
+        "\n\nRespond ONLY with a valid JSON object."
+    )
+    return f"""## SEPSIS RECOGNITION & MANAGEMENT
+**Patient**: {p.age}yo {p.sex} | Arrived: {obs.time_elapsed_minutes}min ago
+**Chief Complaint**: {p.chief_complaint}
+**Allergies**: {", ".join(p.allergies) or "NKDA"}  ← CHECK BEFORE PRESCRIBING
+**History**: {", ".join(p.medical_history)}
+**Medications**: {meds}
+**Vitals**: {_vitals_block(v)}
+**MAP**: {map_val} mmHg  |  **qSOFA**: {obs.qsofa_score}/3
+**Labs**: {json.dumps(p.lab_results, indent=2) if p.lab_results else "Pending"}
+Hour-1 SSC Bundle checklist:
+  ☐ Blood cultures × 2 BEFORE antibiotics
+  ☐ Broad-spectrum antibiotics (check allergies!)
+  ☐ Serum lactate (repeat if >2)
+  ☐ 30 mL/kg IV crystalloid if MAP<65 or lactate≥4
+  ☐ Vasopressors (NE first-line) if MAP<65 despite fluids
+{cot_instruction}
+JSON schema:
 {{
   "sepsis_diagnosis": "<sepsis|septic_shock|SIRS_only|no_sepsis>",
-  "blood_cultures_ordered": <true|false>,
-  "antibiotics_ordered": <true|false>,
-  "antibiotic_choice": "<drug_name or null>",
-  "lactate_ordered": <true|false>,
+  "blood_cultures_ordered": <bool>,
+  "antibiotics_ordered": <bool>,
+  "antibiotic_choice": "<drug_name|null>",
+  "lactate_ordered": <bool>,
   "iv_fluid_bolus_ml": <int>,
-  "vasopressor_ordered": <true|false>,
-  "vasopressor_choice": "<drug_name or null>",
-  "source_control_identified": "<source or null>",
-  "clinical_rationale": "<detailed reasoning, minimum 50 words>",
-  "time_to_antibiotics_minutes": <int or null>
+  "vasopressor_ordered": <bool>,
+  "vasopressor_choice": "<drug_name|null>",
+  "source_control_identified": "<source|null>",
+  "clinical_rationale": "<detailed reasoning, min 50 words>",
+  "time_to_antibiotics_minutes": <int|null>
 }}"""
 
 
-def parse_llm_response(response: str, task_type: str):
-    """Parse LLM JSON response into the appropriate action type."""
+# ─────────────────────────────────────────────────────────────────────────────
+# JSON extraction (multi-strategy)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def extract_json(response: str) -> Optional[Dict]:
+    """Try multiple strategies to extract JSON from LLM response."""
     if not response:
-        return _get_fallback_action(task_type)
+        return None
 
-    # Clean up response (strip markdown code blocks if present)
+    # Strategy 1: Direct parse
+    try:
+        return json.loads(response.strip())
+    except Exception:
+        pass
+
+    # Strategy 2: Extract after "ACTION:" label
+    if "ACTION:" in response:
+        after = response.split("ACTION:")[-1].strip()
+        try:
+            return json.loads(after)
+        except Exception:
+            pass
+
+    # Strategy 3: Find JSON block with braces
+    depth = 0
+    start = -1
+    for i, ch in enumerate(response):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    return json.loads(response[start:i+1])
+                except Exception:
+                    pass
+
+    # Strategy 4: Strip markdown fences
     cleaned = response.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.split("\n")
-        cleaned = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
-    cleaned = cleaned.strip()
-
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
-        # Try to extract JSON from response
-        import re
-        match = re.search(r'\{.*\}', cleaned, re.DOTALL)
-        if match:
+    for fence in ["```json", "```JSON", "```"]:
+        if cleaned.startswith(fence):
+            cleaned = cleaned[len(fence):]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
             try:
-                data = json.loads(match.group())
+                return json.loads(cleaned.strip())
             except Exception:
-                return _get_fallback_action(task_type)
-        else:
-            return _get_fallback_action(task_type)
+                pass
 
-    try:
-        if task_type == "triage":
-            return TriageAction(**data)
-        elif task_type == "medication_safety":
-            return MedicationSafetyAction(**data)
-        elif task_type == "sepsis":
-            return SepsisManagementAction(**data)
-    except Exception as e:
-        print(f"  ⚠ Action parsing error: {e}")
-        return _get_fallback_action(task_type)
+    return None
 
 
-def _get_fallback_action(task_type: str):
-    """Return a neutral fallback action when LLM fails."""
+def get_fallback_action(task_type: str) -> Dict:
+    """Minimal valid fallback action when LLM fails."""
     if task_type == "triage":
-        return TriageAction(esi_level=3, rationale="Unable to parse response - defaulting to ESI-3")
+        return {"esi_level": 3, "rationale": "Unable to parse response — default ESI-3 assigned.",
+                "recommended_immediate_interventions": []}
     elif task_type == "medication_safety":
-        return MedicationSafetyAction(
-            severity_assessment="moderate",
-            clinical_rationale="Unable to parse response - review required"
-        )
-    elif task_type == "sepsis":
-        return SepsisManagementAction(
-            sepsis_diagnosis="sepsis",
-            clinical_rationale="Unable to parse response - standard sepsis protocol",
-            blood_cultures_ordered=True,
-            antibiotics_ordered=True,
-            lactate_ordered=True,
-        )
+        return {"flagged_interactions": [], "flagged_contraindications": [],
+                "flagged_dosing_errors": [], "recommended_changes": [],
+                "severity_assessment": "moderate",
+                "clinical_rationale": "Unable to parse response."}
+    else:
+        return {"sepsis_diagnosis": "sepsis", "blood_cultures_ordered": True,
+                "antibiotics_ordered": True, "antibiotic_choice": "piperacillin_tazobactam",
+                "lactate_ordered": True, "iv_fluid_bolus_ml": 2100,
+                "vasopressor_ordered": False, "vasopressor_choice": None,
+                "source_control_identified": None,
+                "clinical_rationale": "Unable to parse response — default SSC bundle applied.",
+                "time_to_antibiotics_minutes": 60}
+
+
+def build_action(data: Dict, task_type: str):
+    """Build typed Pydantic action from raw dict."""
+    if task_type == "triage":
+        # Normalise field aliases
+        if "reasoning" in data and "rationale" not in data:
+            data["rationale"] = data.pop("reasoning")
+        if "immediate_actions" in data and "recommended_immediate_interventions" not in data:
+            data["recommended_immediate_interventions"] = data.pop("immediate_actions")
+        data.setdefault("rationale", "No rationale provided.")
+        data.setdefault("recommended_immediate_interventions", [])
+        return TriageAction(**{k: v for k, v in data.items()
+                               if k in TriageAction.model_fields})
+    elif task_type == "medication_safety":
+        data.setdefault("clinical_rationale", "No rationale.")
+        data.setdefault("severity_assessment", "moderate")
+        return MedicationSafetyAction(**{k: v for k, v in data.items()
+                                         if k in MedicationSafetyAction.model_fields})
+    else:
+        data.setdefault("clinical_rationale", "No rationale.")
+        data.setdefault("sepsis_diagnosis", "sepsis")
+        return SepsisManagementAction(**{k: v for k, v in data.items()
+                                         if k in SepsisManagementAction.model_fields})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main Inference Loop
+# Single task runner
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_task(client: OpenAI, task_id: str, verbose: bool = True) -> Dict[str, Any]:
-    """Run a single task and return results."""
+def run_task(
+    client: OpenAI,
+    task_id: str,
+    use_cot: bool = True,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """Run a single task end-to-end and return full result dict."""
+    start_time = time.time()
+    meta       = TASK_REGISTRY[task_id]
+    task_type  = meta["type"]
+    difficulty = meta["difficulty"]
+    temperature = TEMPERATURE_BY_DIFFICULTY.get(difficulty, 0.05)
+
     env = ClinicalTriageEnv(task_id=task_id)
-    task_meta = TASK_REGISTRY[task_id]
-    task_type = task_meta["type"]
-
-    if verbose:
-        print(f"\n{'='*60}")
-        print(f"Task: {task_meta['name']}")
-        print(f"Type: {task_type} | Difficulty: {task_meta['difficulty']}")
-        print(f"{'='*60}")
-
-    # Reset environment
     obs = env.reset()
 
     if verbose:
-        print(f"Patient: {obs.patient.chief_complaint}")
-        print(f"Task: {obs.task_description[:120]}...")
+        print(f"\n{'─'*60}")
+        print(f"  Task: {task_id}  ({difficulty})")
+        print(f"  Patient: {obs.patient.age}yo {obs.patient.sex} — "
+              f"{obs.patient.chief_complaint[:60]}")
 
-    # Build prompt based on task type
+    # Build prompt
+    sys_prompt = SYSTEM_PROMPTS.get(task_type, SYSTEM_PROMPTS["triage"])
     if task_type == "triage":
-        prompt = build_triage_prompt(obs)
+        user_prompt = build_triage_prompt(obs, use_cot)
     elif task_type == "medication_safety":
-        prompt = build_med_safety_prompt(obs)
-    elif task_type == "sepsis":
-        prompt = build_sepsis_prompt(obs)
+        user_prompt = build_med_safety_prompt(obs, use_cot)
     else:
-        raise ValueError(f"Unknown task type: {task_type}")
+        user_prompt = build_sepsis_prompt(obs, use_cot)
 
-    # Call LLM
-    if verbose:
-        print(f"\nCalling {MODEL_NAME}...")
-    
-    start = time.time()
-    llm_response = call_llm(client, prompt, SYSTEM_PROMPT)
-    elapsed = time.time() - start
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user",   "content": user_prompt},
+    ]
 
-    if verbose and llm_response:
-        print(f"LLM Response ({elapsed:.1f}s):\n{llm_response[:500]}{'...' if len(llm_response) > 500 else ''}")
+    # LLM call
+    raw_response = call_llm(client, messages, temperature=temperature)
 
-    # Parse action
-    action = parse_llm_response(llm_response, task_type)
+    # Extract reasoning (CoT) and JSON
+    reasoning = ""
+    if use_cot and "REASONING:" in raw_response:
+        parts = raw_response.split("ACTION:")
+        reasoning = parts[0].replace("REASONING:", "").strip()
+        action_part = parts[1].strip() if len(parts) > 1 else raw_response
+    else:
+        action_part = raw_response
 
-    if verbose:
-        print(f"\nParsed Action: {action.model_dump()}")
+    data = extract_json(action_part) or get_fallback_action(task_type)
 
-    # Step environment
+    # Build and step
+    try:
+        action = build_action(data, task_type)
+    except Exception as e:
+        if verbose:
+            print(f"    ✗ Action build error: {e}. Using fallback.")
+        data   = get_fallback_action(task_type)
+        action = build_action(data, task_type)
+
     obs_out, reward, done, info = env.step(action)
+    elapsed = round(time.time() - start_time, 2)
 
     if verbose:
-        print(f"\n{'-'*50}")
-        print(f"Score: {info['grade']:.3f} | Reward: {reward:.3f}")
-        print(f"Passed: {'✅' if info['passed'] else '❌'}")
+        passed_icon = "✅" if info.get("passed") else "❌"
+        print(f"  Reward: {reward:.3f}  Grade: {info.get('grade', reward):.3f}  "
+              f"{passed_icon}  ({elapsed}s)")
         if info.get("critical_errors"):
-            print(f"Critical Errors: {info['critical_errors']}")
-        print(f"\nFeedback:\n{obs_out.feedback}")
+            for err in info["critical_errors"]:
+                print(f"    ⚠  {err[:90]}")
+        if info.get("component_scores"):
+            for comp, score in info["component_scores"].items():
+                bar = "█" * int(score * 8) + "░" * (8 - int(score * 8))
+                print(f"    {comp:35s} {bar} {score:.3f}")
 
     return {
-        "task_id": task_id,
-        "task_name": task_meta["name"],
-        "task_type": task_type,
-        "difficulty": task_meta["difficulty"],
-        "score": info["grade"],
-        "reward": reward,
-        "passed": info["passed"],
-        "component_scores": info["component_scores"],
-        "critical_errors": info["critical_errors"],
-        "llm_response_length": len(llm_response),
-        "inference_time_seconds": round(elapsed, 2),
+        "task_id":          task_id,
+        "task_type":        task_type,
+        "difficulty":       difficulty,
+        "reward":           reward,
+        "grade":            info.get("grade", reward),
+        "passed":           info.get("passed", False),
+        "total_reward":     info.get("total_reward", reward),
+        "component_scores": info.get("component_scores", {}),
+        "critical_errors":  info.get("critical_errors", []),
+        "reasoning":        reasoning,
+        "raw_action":       data,
+        "feedback":         obs_out.feedback if hasattr(obs_out, "feedback") else "",
+        "elapsed_seconds":  elapsed,
+        "model":            MODEL_NAME,
+        "timestamp":        datetime.now(timezone.utc).isoformat(),
     }
 
 
-def run_all_tasks(task_ids: List[str], verbose: bool = True) -> Dict[str, Any]:
-    """Run all tasks and produce a summary report."""
-    client = get_client()
+# ─────────────────────────────────────────────────────────────────────────────
+# Benchmark runner
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_benchmark(
+    tasks: List[str],
+    use_cot: bool = True,
+    output_path: Optional[str] = None,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    client  = get_client()
     results = []
-    total_start = time.time()
 
-    print(f"\n{'#'*60}")
-    print(f"# ClinicalTriageEnv Baseline Inference")
-    print(f"# Model: {MODEL_NAME}")
-    print(f"# API: {API_BASE_URL}")
-    print(f"# Tasks: {len(task_ids)}")
-    print(f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'#'*60}")
+    print(f"\n{'═'*60}")
+    print(f"  ClinicalTriageEnv Benchmark")
+    print(f"  Model:  {MODEL_NAME}")
+    print(f"  Tasks:  {len(tasks)}")
+    print(f"  CoT:    {'enabled' if use_cot else 'disabled'}")
+    print(f"  Time:   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"{'═'*60}")
 
-    for task_id in task_ids:
-        try:
-            result = run_task(client, task_id, verbose=verbose)
-            results.append(result)
-        except Exception as e:
-            print(f"  ✗ Task {task_id} failed: {e}")
-            results.append({
-                "task_id": task_id,
-                "score": 0.0,
-                "reward": 0.0,
-                "passed": False,
-                "error": str(e),
-            })
-        # Small delay between tasks to avoid rate limiting
-        time.sleep(1)
+    for task_id in tasks:
+        if task_id not in TASK_REGISTRY:
+            print(f"  ⚠  Unknown task: {task_id} — skipped")
+            continue
+        result = run_task(client, task_id, use_cot=use_cot, verbose=verbose)
+        results.append(result)
+        time.sleep(0.5)  # brief rate-limit buffer
 
-    total_time = time.time() - total_start
+    # ── Summary ─────────────────────────────────────────────────────────────
+    if results:
+        rewards   = [r["reward"] for r in results]
+        passed    = [r for r in results if r["passed"]]
+        avg_r     = sum(rewards) / len(rewards)
+        max_r     = max(rewards)
+        min_r     = min(rewards)
 
-    # ── Summary ──────────────────────────────────────────────────
-    scores_by_type = {}
-    scores_by_difficulty = {}
+        # Per-domain breakdown
+        domains: Dict[str, List[float]] = {}
+        for r in results:
+            domains.setdefault(r["task_type"], []).append(r["reward"])
 
-    for r in results:
-        t = r.get("task_type", "unknown")
-        d = r.get("difficulty", "unknown")
-        scores_by_type.setdefault(t, []).append(r["score"])
-        scores_by_difficulty.setdefault(d, []).append(r["score"])
-
-    overall_scores = [r["score"] for r in results]
-    overall_avg = sum(overall_scores) / len(overall_scores) if overall_scores else 0
+        print(f"\n{'═'*60}")
+        print(f"  BENCHMARK RESULTS")
+        print(f"{'─'*60}")
+        print(f"  Tasks completed:   {len(results)}/{len(tasks)}")
+        print(f"  Passed (≥0.60):    {len(passed)}/{len(results)}")
+        print(f"  Average reward:    {avg_r:.3f}")
+        print(f"  Best / Worst:      {max_r:.3f} / {min_r:.3f}")
+        print(f"\n  Per-Domain Averages:")
+        for domain, scores in domains.items():
+            d_avg = sum(scores) / len(scores)
+            bar   = "█" * int(d_avg * 20) + "░" * (20 - int(d_avg * 20))
+            print(f"    {domain:20s} {bar} {d_avg:.3f}")
+        print(f"\n  Per-Task Summary:")
+        for r in results:
+            icon = "✅" if r["passed"] else "❌"
+            print(f"    {icon} {r['task_id']:25s} {r['reward']:.3f}  "
+                  f"({r['difficulty']})")
+        print(f"{'═'*60}")
 
     summary = {
-        "run_info": {
-            "model": MODEL_NAME,
-            "api_base": API_BASE_URL,
-            "timestamp": datetime.now().isoformat(),
-            "total_time_seconds": round(total_time, 1),
-            "num_tasks": len(task_ids),
-        },
-        "overall": {
-            "mean_score": round(overall_avg, 4),
-            "pass_rate": round(sum(1 for r in results if r.get("passed")) / len(results), 3),
-            "scores": {r["task_id"]: r["score"] for r in results},
-        },
-        "by_task_type": {
-            t: round(sum(s)/len(s), 4) for t, s in scores_by_type.items()
-        },
-        "by_difficulty": {
-            d: round(sum(s)/len(s), 4) for d, s in scores_by_difficulty.items()
-        },
-        "detailed_results": results,
+        "model":        MODEL_NAME,
+        "cot_enabled":  use_cot,
+        "timestamp":    datetime.now(timezone.utc).isoformat(),
+        "tasks_run":    len(results),
+        "tasks_passed": len(passed) if results else 0,
+        "avg_reward":   round(avg_r, 4) if results else 0.0,
+        "max_reward":   round(max_r, 4) if results else 0.0,
+        "min_reward":   round(min_r, 4) if results else 0.0,
+        "per_domain":   {d: round(sum(s)/len(s), 4) for d, s in domains.items()} if results else {},
+        "results":      results,
     }
 
-    # Print summary table
-    print(f"\n{'='*60}")
-    print("RESULTS SUMMARY")
-    print(f"{'='*60}")
-    print(f"{'Task':<35} {'Score':>7} {'Reward':>8} {'Pass':>6}")
-    print(f"{'-'*60}")
-    for r in results:
-        name = r.get("task_name", r["task_id"])[:33]
-        score = r.get("score", 0.0)
-        reward = r.get("reward", 0.0)
-        passed = "✅" if r.get("passed") else "❌"
-        print(f"{name:<35} {score:>7.3f} {reward:>8.4f} {passed:>6}")
+    # ── Export ───────────────────────────────────────────────────────────────
+    if output_path:
+        with open(output_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"\n  💾  Results saved → {output_path}")
 
-    print(f"{'-'*60}")
-    print(f"{'OVERALL MEAN':<35} {overall_avg:>7.3f}")
-    print(f"\nBy Task Type:")
-    for t, avg in summary["by_task_type"].items():
-        print(f"  {t:<30} {avg:.4f}")
-    print(f"\nBy Difficulty:")
-    for d, avg in summary["by_difficulty"].items():
-        print(f"  {d:<30} {avg:.4f}")
-    print(f"\nTotal inference time: {total_time:.1f}s")
-    print(f"{'='*60}\n")
+        # Also write CSV for easy analysis
+        csv_path = output_path.replace(".json", ".csv")
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "task_id", "task_type", "difficulty",
+                "reward", "grade", "passed", "elapsed_seconds",
+            ])
+            writer.writeheader()
+            for r in results:
+                writer.writerow({k: r[k] for k in writer.fieldnames})
+        print(f"  💾  CSV saved      → {csv_path}")
 
     return summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Entry Point
+# CLI entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="ClinicalTriageEnv Baseline Inference Script"
-    )
-    parser.add_argument(
-        "--tasks",
-        nargs="+",
-        default=ALL_TASKS,
-        choices=list(TASK_REGISTRY.keys()),
-        help="Tasks to run (default: all 9 tasks)"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="results.json",
-        help="Output file for results (default: results.json)"
-    )
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress verbose output"
-    )
+    parser = argparse.ArgumentParser(description="ClinicalTriageEnv Inference Benchmark v2")
+    parser.add_argument("--tasks",  nargs="+", default=ALL_TASKS, help="Task IDs to run")
+    parser.add_argument("--output", default=None,  help="Output JSON path")
+    parser.add_argument("--model",  default=None,  help="Override MODEL_NAME")
+    parser.add_argument("--no-cot", action="store_true", help="Disable chain-of-thought")
+    parser.add_argument("--quiet",  action="store_true", help="Suppress verbose output")
     args = parser.parse_args()
 
-    # Validate credentials
-    if not API_KEY:
-        print("⚠️  Warning: No API key found. Set HF_TOKEN or API_KEY environment variable.")
-        print("   Continuing with dummy key (will fail on real API calls)...")
+    if args.model:
+        global MODEL_NAME
+        MODEL_NAME = args.model
 
-    # Run inference
-    results = run_all_tasks(args.tasks, verbose=not args.quiet)
-
-    # Save results
-    output_path = args.output
-    with open(output_path, "w") as f:
-        json.dump(results, f, indent=2, default=str)
-    print(f"\n📄 Results saved to: {output_path}")
-
-    # Exit code: 0 if pass rate > 0, 1 if all failed
-    pass_rate = results["overall"]["pass_rate"]
-    sys.exit(0 if pass_rate > 0 else 1)
+    run_benchmark(
+        tasks=args.tasks,
+        use_cot=not args.no_cot,
+        output_path=args.output,
+        verbose=not args.quiet,
+    )
 
 
 if __name__ == "__main__":
