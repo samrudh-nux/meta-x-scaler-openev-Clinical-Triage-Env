@@ -5,7 +5,7 @@ Creator: Samrudh
 
 <div align="center">
 
-[![HuggingFace Space](https://img.shields.io/badge/🤗%20HuggingFace-Space-orange?style=for-the-badge)](https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u)
+[![HuggingFace Space](https://img.shields.io/badge/🤗%20HuggingFace-Space-orange?style=for-the-badge)](https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u2)
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-Compatible-green?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyTDIgN3YxMGwxMCA1IDEwLTV2LTEweiIvPjwvc3ZnPg==)](https://openenv.dev)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python)](https://python.org)
@@ -15,7 +15,7 @@ Creator: Samrudh
 
 *Emergency triage · Drug safety · Sepsis management · Partial scoring · Real undertriage penalties*
 
-[**Live Demo**](https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u) · [**API Docs**](https://samrudh-nux-my-healthcare-ev4u.hf.space/docs) · [**OpenEnv Spec**](openenv.yaml)
+[**Live Demo**](https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u2) · [**API Docs**](https://samrudh-nux-my-healthcare-ev4u2.hf.space/docs) · [**OpenEnv Spec**](openenv.yaml)
 
 </div>
 
@@ -81,7 +81,7 @@ tasks = requests.get(f"{BASE}/tasks").json()
 ```python
 import requests
 
-BASE = "https://samrudh-nux-my-healthcare-ev4u.hf.space"
+BASE = "https://samrudh-nux-my-healthcare-ev4u2.hf.space"
 
 # Step 1: Start an episode
 reset = requests.post(f"{BASE}/reset", json={
@@ -122,7 +122,7 @@ print(f"Feedback: {result['feedback'][:200]}")
 
 ## API Reference
 
-Base URL: `https://samrudh-nux-my-healthcare-ev4u.hf.space`
+Base URL: `https://samrudh-nux-my-healthcare-ev4u2.hf.space`
 
 ### Endpoints
 
@@ -389,8 +389,8 @@ ClinicalTriageEnv/
 
 ```bash
 # Clone
-git clone https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u
-cd my-healthcare-ev4u
+git clone https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u2
+cd my-healthcare-ev4u2
 
 # Install dependencies
 pip install -r requirements.txt
@@ -416,7 +416,7 @@ The ICU dashboard will be available at `http://localhost:7860`.
 ```python
 import requests
 
-BASE = "https://samrudh-nux-my-healthcare-ev4u.hf.space"
+BASE = "https://samrudh-nux-my-healthcare-ev4u2.hf.space"
 
 TASK_ACTIONS = {
     "triage_easy": {
@@ -570,7 +570,7 @@ If you use ClinicalTriageEnv in your research or competition submission, please 
   title     = {ClinicalTriageEnv: A Clinical Decision Intelligence Environment for RL},
   year      = {2026},
   publisher = {HuggingFace},
-  url       = {https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u},
+  url       = {https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u2},
   note      = {OpenEnv Hackathon 2026}
 }
 ```
@@ -591,6 +591,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-Built for **OpenEnv Hackathon 2026** · MIT License · [HuggingFace Space](https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u)
+Built for **OpenEnv Hackathon 2026** · MIT License · [HuggingFace Space](https://huggingface.co/spaces/samrudh-nux/my-healthcare-ev4u2)
 
 </div>
