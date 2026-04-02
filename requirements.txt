@@ -1,9 +1,8 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
-websockets==13.1
 httpx==0.27.2
 openai==1.51.0
 python-multipart==0.0.12
 PyYAML==6.0.2
-gradio
+reportlab==4.2.0
