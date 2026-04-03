@@ -11,8 +11,7 @@ short_description: Enterprise Clinical AI Training Environment — Multi-Agent T
 
 <div align="center">
  
-[![OpenEnv 2025](https://img.shields.io/badge/OpenEnv%202025-Submission-blue?style=for-the-badge&logo=huggingface&logoColor=white)](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv)
-[![Clinical AI](https://img.shields.io/badge/Clinical%20AI-Enterprise%20Grade-red?style=for-the-badge&logo=heart&logoColor=white)](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv)
+ [![Clinical AI](https://img.shields.io/badge/Clinical%20AI-Enterprise%20Grade-red?style=for-the-badge&logo=heart&logoColor=white)](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Multi-Agent](https://img.shields.io/badge/Multi--Agent-AI%20Architecture-6d28d9?style=for-the-badge&logo=buffer&logoColor=white)](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green?style=for-the-badge&logo=apache&logoColor=white)](https://www.apache.org/licenses/LICENSE-2.0)
