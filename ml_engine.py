@@ -1,8 +1,6 @@
 """
 ml_engine.py — NeuralMed CDS · Real ML Prediction Layer
-=========================================================
-Synthetic Dataset: N=120, 15 disease classes, PubMed-inspired
-Pipeline: Feature Extraction (12-dim) → LR+NB Ensemble → Calibration → Output
+
 """
 from __future__ import annotations
 import math, random
