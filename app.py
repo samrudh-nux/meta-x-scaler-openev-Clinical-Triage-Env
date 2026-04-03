@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-# ── Optional PDF ──────────────────────────────────────────────────
+# ── Optional PDF ─────
 try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -21,16 +21,16 @@ try:
 except ImportError:
     PDF_AVAILABLE = False
 
-# ── Optional OpenAI ───────────────────────────────────────────────
+# ── Optional OpenAI --
 try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
 
-# =================================================================
+# 
 # APP
-# =================================================================
+# 
 
 app = FastAPI(
     title="NeuralMed CDS — Clinical Decision Support",
@@ -51,9 +51,9 @@ app.add_middleware(
 _sessions: Dict[str, Dict] = {}
 _report_cache: Dict[str, Dict] = {}
 
-# =================================================================
+# 
 # TASK REGISTRY
-# =================================================================
+# 
 
 TASK_REGISTRY = {
     "triage_easy":       {"name": "Basic Triage", "type": "triage", "difficulty": "easy",   "max_steps": 3, "description": "Classify patient acuity from vitals and complaint"},
@@ -78,9 +78,9 @@ MORTALITY_RISK = {
     "sepsis_hard":       {"baseline": 45.0, "undertriage_mult": 6.0, "delay_per_min": 1.20},
 }
 
-# =================================================================
+# 
 # SYNTHETIC DATASET
-# =================================================================
+# 
 
 DATASET = [
     {"id":"CS-001","age":52,"sex":"M","symptoms":"Crushing substernal chest pain radiating to left arm and jaw, diaphoresis, nausea","vitals":{"hr":108,"sbp":92,"temp_f":98.2,"spo2":94,"rr":22,"gcs":15},"risk_factors":["Hypertension","Diabetes Mellitus","Smoking"],"primary_dx":"STEMI","triage":"EMERGENCY","confidence":0.87},
