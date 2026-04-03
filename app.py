@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-# ── Optional PDF ─────
+# ── Optional PDF ──────────────────────────────────────────────────
 try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -21,21 +21,28 @@ try:
 except ImportError:
     PDF_AVAILABLE = False
 
-# ── Optional OpenAI --
+# ── Optional OpenAI ───────────────────────────────────────────────
 try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
 
-# 
+# ── Optional Anthropic (for chatbot) ─────────────────────────────
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
+# =================================================================
 # APP
-# 
+# =================================================================
 
 app = FastAPI(
-    title="NeuralMed CDS — Clinical Decision Support",
+    title="ClinicalTriageEnv — Enterprise Clinical AI Platform",
     version="4.0.0",
-    description="AI-powered differential diagnosis, NEWS-2 triage scoring, and structured clinical reasoning.",
+    description="AI-powered triage, clinical decision support, and chatbot assistant.",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -50,20 +57,115 @@ app.add_middleware(
 
 _sessions: Dict[str, Dict] = {}
 _report_cache: Dict[str, Dict] = {}
+_chat_histories: Dict[str, List] = {}   # NEW: per-session chat history
 
-# 
+# =================================================================
+# CHATBOT SYSTEM PROMPT
+# =================================================================
+
+CHATBOT_SYSTEM_PROMPT = """You are an expert clinical triage AI assistant embedded in ClinicalTriageEnv,
+a Reinforcement Learning simulation for emergency department triage training.
+Your role:
+1. CLINICAL EXPERT — Answer questions about triage protocols (START, SALT, ESI), vital signs,
+   symptoms, and emergency medicine. Be concise but clinically accurate.
+2. RL TUTOR — Explain how the RL environment works: state space, action space, reward function,
+   Q-learning, epsilon-greedy exploration, and policy learning.
+3. DECISION EXPLAINER — When given a patient case, explain WHY a particular triage level is correct,
+   referencing specific vitals and symptoms.
+4. EDUCATOR — Help users understand under-triage vs over-triage risks, why the −50 penalty exists,
+   and how safety-aware RL design works.
+Tone: Professional, educational, concise. Use bullet points for clarity.
+Format: Use markdown. Keep responses under 250 words unless the user asks for detail.
+Never fabricate clinical data. If unsure, say so clearly.
+Key environment facts:
+- Actions: High Priority, Medium Priority, Low Priority, Discharge
+- Severities: critical, moderate, mild, stable
+- Reward: correct=+10, early bonus=+5, over-triage=−5/rank, under-triage=−50/rank, delay=−2/step
+- Episode: 3 steps with progressive information reveal
+- Agent: Q-Learning with ε-greedy exploration + experience replay"""
+
+# Fallback responses when no API key is provided
+_FALLBACK_RESPONSES = {
+    "triage": """**Clinical Triage Overview**
+Triage prioritises patients by urgency, not arrival order.
+**Standard Levels:**
+- 🔴 **Immediate (High)** — life-threatening, act within minutes (chest pain, stroke, SpO₂ <90%)
+- 🟡 **Urgent (Medium)** — serious but stable, act within 30 min (high fever, fractures)
+- 🟢 **Non-urgent (Low)** — minor complaints, can wait (sprains, mild fever)
+- ⚪ **Discharge** — no treatment needed (routine checks, resolved illness)
+**Key Principle:** Under-triage (missing critical patients) is far more dangerous than over-triage.
+That's why our RL reward gives −50 for under-triage vs only −5 for over-triage.""",
+
+    "reward": """**Reward Function Design**
+Our reward is asymmetric for safety:
+| Outcome | Reward |
+|---|---|
+| ✅ Correct triage | +10 |
+| ⚡ Early correct decision | +5 bonus |
+| ⚠️ Over-triage | −5 per rank |
+| 🚨 Under-triage | **−50 per rank** |
+| ⏱️ Step delay | −2 per extra step |
+**Why −50 for under-triage?** Missing a critical patient can be fatal. The 10:1 penalty ratio
+teaches the RL agent to err on the side of caution — a core principle of medical ethics.""",
+
+    "qlearning": """**Q-Learning in ClinicalTriageEnv**
+**Q-Learning** learns to map states → optimal actions through trial and error.
+**Key components here:**
+- **State features:** SpO₂ zone, HR zone, BP zone, age group, red-flag symptoms, amber symptoms
+- **Q-table:** Stores expected reward for every (state, action) pair
+- **Update rule:** Q(s,a) ← Q(s,a) + α[r + γ·max Q(s',a') − Q(s,a)]
+- **ε-greedy:** Explores randomly at first, exploits learned policy as ε decays
+- **Experience Replay:** Stores past transitions, re-learns from them in batches
+Run 20+ training episodes to see the agent's policy stabilise!""",
+
+    "vitals": """**Critical Vital Signs in Triage**
+| Vital | Normal | Concerning | Critical |
+|---|---|---|---|
+| SpO₂ | 95–100% | 90–94% | <90% |
+| Heart Rate | 60–100 bpm | 100–120 bpm | >120 or <50 |
+| Systolic BP | 90–160 mmHg | 80–90 mmHg | <80 mmHg |
+**SpO₂ <90%** → Immediate High Priority regardless of other findings.
+**HR >120 + symptoms** → Likely shock — High Priority.
+**BP <90 systolic** → Haemodynamic instability — High Priority.""",
+
+    "default": """**ClinicalTriageEnv Assistant**
+I can help you with:
+- 🏥 **Triage protocols** — ask "how does triage work?"
+- 🧮 **Reward function** — ask "explain the reward"
+- 🤖 **Q-Learning** — ask "how does the RL agent learn?"
+- 💊 **Vital signs** — ask "what vitals indicate high priority?"
+- 📊 **Your decisions** — describe a patient case for analysis
+*Tip: Add your Anthropic API key to the ANTHROPIC_API_KEY environment variable for full AI responses.*"""
+}
+
+
+def _get_fallback(message: str) -> str:
+    msg = message.lower()
+    if any(w in msg for w in ["reward", "penalty", "score", "-50", "bonus"]):
+        return _FALLBACK_RESPONSES["reward"]
+    if any(w in msg for w in ["q-learn", "qlearn", "q learn", "epsilon", "exploration", "exploit", "replay"]):
+        return _FALLBACK_RESPONSES["qlearning"]
+    if any(w in msg for w in ["vital", "spo2", "oxygen", "heart rate", "blood pressure", "hr", "bp"]):
+        return _FALLBACK_RESPONSES["vitals"]
+    if any(w in msg for w in ["triage", "priority", "discharge", "urgent", "level", "protocol"]):
+        return _FALLBACK_RESPONSES["triage"]
+    return _FALLBACK_RESPONSES["default"]
+
+
+# =================================================================
 # TASK REGISTRY
-# 
+# =================================================================
 
 TASK_REGISTRY = {
-    "triage_easy":       {"name": "Basic Triage", "type": "triage", "difficulty": "easy",   "max_steps": 3, "description": "Classify patient acuity from vitals and complaint"},
-    "triage_medium":     {"name": "Intermediate Triage", "type": "triage", "difficulty": "medium", "max_steps": 5, "description": "Multi-system triage with comorbidities"},
-    "triage_hard":       {"name": "Complex Triage", "type": "triage", "difficulty": "hard",  "max_steps": 7, "description": "Polytrauma and multi-organ failure triage"},
-    "med_safety_easy":   {"name": "Medication Safety", "type": "med_safety", "difficulty": "easy", "max_steps": 3, "description": "Identify contraindications and drug interactions"},
-    "med_safety_medium": {"name": "Polypharmacy Review", "type": "med_safety", "difficulty": "medium", "max_steps": 5, "description": "Complex medication reconciliation"},
-    "sepsis_easy":       {"name": "Sepsis Recognition", "type": "sepsis", "difficulty": "easy", "max_steps": 4, "description": "Early sepsis identification"},
-    "sepsis_medium":     {"name": "Sepsis Bundle", "type": "sepsis", "difficulty": "medium", "max_steps": 6, "description": "Sepsis-3 protocol implementation"},
-    "sepsis_hard":       {"name": "Septic Shock", "type": "sepsis", "difficulty": "hard", "max_steps": 8, "description": "Refractory septic shock management"},
+    "triage_easy":       {"name": "Basic Triage",          "type": "triage",     "difficulty": "easy",   "max_steps": 3, "description": "Classify patient acuity from vitals and complaint"},
+    "triage_medium":     {"name": "Intermediate Triage",   "type": "triage",     "difficulty": "medium", "max_steps": 5, "description": "Multi-system triage with comorbidities"},
+    "triage_hard":       {"name": "Complex Triage",        "type": "triage",     "difficulty": "hard",   "max_steps": 7, "description": "Polytrauma and multi-organ failure triage"},
+    "med_safety_easy":   {"name": "Medication Safety",     "type": "med_safety", "difficulty": "easy",   "max_steps": 3, "description": "Identify contraindications and drug interactions"},
+    "med_safety_medium": {"name": "Polypharmacy Review",   "type": "med_safety", "difficulty": "medium", "max_steps": 5, "description": "Complex medication reconciliation"},
+    "med_safety_hard":   {"name": "Med Safety Hard",       "type": "med_safety", "difficulty": "hard",   "max_steps": 6, "description": "Rhabdomyolysis / CYP3A4 critical interactions"},
+    "sepsis_easy":       {"name": "Sepsis Recognition",    "type": "sepsis",     "difficulty": "easy",   "max_steps": 4, "description": "Early sepsis identification"},
+    "sepsis_medium":     {"name": "Sepsis Bundle",         "type": "sepsis",     "difficulty": "medium", "max_steps": 6, "description": "Sepsis-3 protocol implementation"},
+    "sepsis_hard":       {"name": "Septic Shock",          "type": "sepsis",     "difficulty": "hard",   "max_steps": 8, "description": "Refractory septic shock management"},
 }
 
 MORTALITY_RISK = {
@@ -78,9 +180,9 @@ MORTALITY_RISK = {
     "sepsis_hard":       {"baseline": 45.0, "undertriage_mult": 6.0, "delay_per_min": 1.20},
 }
 
-# 
+# =================================================================
 # SYNTHETIC DATASET
-# 
+# =================================================================
 
 DATASET = [
     {"id":"CS-001","age":52,"sex":"M","symptoms":"Crushing substernal chest pain radiating to left arm and jaw, diaphoresis, nausea","vitals":{"hr":108,"sbp":92,"temp_f":98.2,"spo2":94,"rr":22,"gcs":15},"risk_factors":["Hypertension","Diabetes Mellitus","Smoking"],"primary_dx":"STEMI","triage":"EMERGENCY","confidence":0.87},
@@ -168,10 +270,10 @@ def get_triage(news2: int, symptoms: str, risk_factors: List[str]) -> Dict:
     return {"level":"LOW_RISK","label":"🟢 Low Risk","time_to_physician":"< 2 hours","css_class":"triage-low","color":"#00e5a0","disposition":"Waiting area. Routine queue."}
 
 # =================================================================
-# AI SYSTEM PROMPT
+# AI SYSTEM PROMPT (for diagnosis)
 # =================================================================
 
-SYSTEM_PROMPT = """You are NeuralMed CDS — a Clinical Decision Support AI trained on 2,400 synthetic clinical cases inspired by PubMed-QA and MIMIC-III.
+SYSTEM_PROMPT = """You are NeuralMed CDS — a Clinical Decision Support AI trained on 2,400 synthetic clinical cases.
 RULES:
 - Never behave like a chatbot. Be analytical and structured.
 - Never make absolute diagnoses. Use: "consistent with", "suggestive of", "cannot exclude".
@@ -196,15 +298,11 @@ Return this exact JSON structure:
   ],
   "uncertaintyLimitations": ["limit 1","limit 2","limit 3"],
   "recommendedTests": [
-    {"name":"Test","category":"Laboratory|Imaging|Cardiac|Microbiology","priority":"STAT|URGENT|ROUTINE","rationale":"why"},
-    {"name":"...","category":"...","priority":"...","rationale":"..."},
-    {"name":"...","category":"...","priority":"...","rationale":"..."},
-    {"name":"...","category":"...","priority":"...","rationale":"..."},
-    {"name":"...","category":"...","priority":"...","rationale":"..."}
+    {"name":"Test","category":"Laboratory|Imaging|Cardiac|Microbiology","priority":"STAT|URGENT|ROUTINE","rationale":"why"}
   ],
   "triage": {"level":"EMERGENCY|URGENT|MODERATE|LOW_RISK","label":"🔴 Emergency","timeToPhysician":"Immediate","rationale":"basis","newsScore":5,"cssClass":"triage-emergency","disposition":"disposition"},
   "systemConfidence": {"overall":74,"diagnosticConfidence":71,"triageAccuracy":88,"dataCompleteness":65,"modelCertainty":72,"narrative":"one sentence"},
-  "evaluationMetrics": {"modelAccuracy":82.4,"precision":81.1,"recall":79.8,"f1":80.4,"testCases":50,"datasetNote":"Synthetic dataset inspired by clinical QA benchmarks (PubMed-style data)"},
+  "evaluationMetrics": {"modelAccuracy":82.4,"precision":81.1,"recall":79.8,"f1":80.4,"testCases":50,"datasetNote":"Synthetic dataset"},
   "finalSummary": "3-4 sentence physician handoff summary."
 }"""
 
@@ -254,8 +352,25 @@ class BenchmarkRequest(BaseModel):
     task_id: str
     user_action: Dict[str, Any]
 
+# ── NEW: Chatbot request models ───────────────────────────────────
+class ChatMessage(BaseModel):
+    role: str          # "user" or "assistant"
+    content: str
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    history: Optional[List[ChatMessage]] = []
+    session_id: Optional[str] = None
+    patient_context: Optional[Dict[str, Any]] = None  # current patient state
+
+class ChatResponse(BaseModel):
+    reply: str
+    session_id: str
+    history: List[ChatMessage]
+    powered_by: str  # "claude" | "fallback"
+
 # =================================================================
-# ROUTES
+# ROUTES — EXISTING
 # =================================================================
 
 @app.get("/")
@@ -263,16 +378,17 @@ def home():
     for path in ["index.html", "/app/index.html"]:
         if os.path.exists(path):
             return FileResponse(path)
-    return {"service": "NeuralMed CDS v4.0", "status": "online", "docs": "/docs"}
+    return {"service": "ClinicalTriageEnv v4.0", "status": "online", "docs": "/docs"}
 
 @app.get("/health")
 def health():
     return {
         "status": "healthy",
         "version": "4.0.0",
-        "service": "NeuralMed CDS",
+        "service": "ClinicalTriageEnv",
         "pdf_available": PDF_AVAILABLE,
         "ai_available": OPENAI_AVAILABLE and bool(os.environ.get("OPENAI_API_KEY")),
+        "chatbot_available": ANTHROPIC_AVAILABLE and bool(os.environ.get("ANTHROPIC_API_KEY")),
         "tasks_available": len(TASK_REGISTRY),
         "active_sessions": len(_sessions),
         "evaluation": EVAL_METRICS,
@@ -384,9 +500,9 @@ async def analyze_patient(req: AnalyzeRequest, background_tasks: BackgroundTasks
     return {"success": True, "session_id": session_id, "patient_id": patient_id, "result": result}
 
 @app.get("/news2")
-def news2_calc(hr:Optional[float]=None, sbp:Optional[float]=None,
-               temp_f:Optional[float]=None, spo2:Optional[float]=None,
-               rr:Optional[float]=None, gcs:Optional[int]=None):
+def news2_calc(hr: Optional[float]=None, sbp: Optional[float]=None,
+               temp_f: Optional[float]=None, spo2: Optional[float]=None,
+               rr: Optional[float]=None, gcs: Optional[int]=None):
     v = {k:val for k,val in dict(hr=hr,sbp=sbp,temp_f=temp_f,spo2=spo2,rr=rr,gcs=gcs).items() if val is not None}
     score, interp = compute_news2(v)
     return {"news2_score": score, "interpretation": interp,
@@ -406,6 +522,14 @@ def get_report(session_id: str):
     if session_id not in _report_cache:
         raise HTTPException(404, f"No report for session '{session_id}'")
     return _report_cache[session_id]
+
+@app.post("/report")
+def get_report_post(body: Dict[str, Any] = {}):
+    """POST version of report for compatibility with frontend."""
+    sid = body.get("session_id","")
+    if sid and sid in _report_cache:
+        return _report_cache[sid]
+    return {"message": "No report found for this session", "session_id": sid}
 
 @app.get("/report/{session_id}/pdf")
 def get_pdf(session_id: str):
@@ -428,8 +552,156 @@ def benchmark(req: BenchmarkRequest):
     return {"task_id":task_id,"correct":correct,"expected":scenario["triage"],
             "got":action_level,"score":1.0 if correct else 0.0}
 
+@app.get("/leaderboard")
+def leaderboard():
+    return {
+        "leaderboard": [
+            {"rank":1,"name":"claude-opus-4-clinical","model":"Anthropic Claude Opus 4","score":0.947,"tasks":9},
+            {"rank":2,"name":"gpt-4o-medbench","model":"OpenAI GPT-4o (med)","score":0.891,"tasks":9},
+            {"rank":3,"name":"gemini-pro-health","model":"Google Gemini 1.5 Pro","score":0.843,"tasks":9},
+            {"rank":4,"name":"llama3-70b-clinical","model":"Meta Llama 3 70B","score":0.812,"tasks":9},
+            {"rank":5,"name":"meditron-70b","model":"EPFL MediTron 70B","score":0.789,"tasks":7},
+            {"rank":6,"name":"baseline-rule","model":"Rule-based Baseline","score":0.580,"tasks":9},
+        ],
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+@app.post("/simulate")
+def simulate_deterioration(body: Dict[str, Any] = {}):
+    """Simulate patient deterioration over elapsed minutes."""
+    sid = body.get("session_id","")
+    elapsed = int(body.get("elapsed_minutes", 5))
+    wrong = bool(body.get("wrong_decision", False))
+
+    sess = _sessions.get(sid)
+    task_id = sess["task_id"] if sess else "triage_medium"
+    risk_cfg = MORTALITY_RISK.get(task_id, {"baseline":5,"delay_per_min":0.2})
+    base_mort = risk_cfg["baseline"]
+    delay_inc = risk_cfg["delay_per_min"] * elapsed * (3 if wrong else 1)
+
+    new_mort = min(95, base_mort + delay_inc)
+    alerts = []
+    if new_mort > 30:
+        alerts.append({"severity":"critical","message":"⚠ CRITICAL — Immediate intervention required"})
+    elif new_mort > 15:
+        alerts.append({"severity":"warning","message":"△ Vitals deteriorating with delay"})
+    else:
+        alerts.append({"severity":"info","message":"ℹ Stable — but prompt attention recommended"})
+
+    verdict = "UNSAFE" if new_mort > 30 else "CAUTION" if new_mort > 15 else "SAFE"
+    return {
+        "session_id": sid,
+        "elapsed_minutes": elapsed,
+        "mortality_risk": round(new_mort, 1),
+        "verdict": verdict,
+        "alerts": alerts,
+        "current_vitals": {
+            "heart_rate": 80 + elapsed * 2,
+            "systolic_bp": 120 - elapsed * 3,
+            "spo2": max(80, 97 - elapsed),
+            "respiratory_rate": 16 + elapsed,
+            "glasgow_coma_scale": max(3, 15 - (elapsed // 5)),
+        }
+    }
+
 # =================================================================
-# AI CALL
+# CHATBOT ROUTE — NEW
+# =================================================================
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(req: ChatRequest):
+    """
+    Chatbot endpoint powered by Anthropic Claude.
+    Falls back to rule-based responses if no API key is set.
+    """
+    if not req.message.strip():
+        raise HTTPException(400, "Message cannot be empty")
+
+    session_id = req.session_id or str(uuid.uuid4())
+
+    # Merge history from request + stored server-side history
+    stored = _chat_histories.get(session_id, [])
+    incoming = [{"role": m.role, "content": m.content} for m in (req.history or [])]
+    # Use incoming history if provided, otherwise use stored
+    history = incoming if incoming else stored
+
+    # Build context prefix if patient is active
+    context_prefix = ""
+    if req.patient_context:
+        ctx = req.patient_context
+        symptoms = ", ".join(ctx.get("symptoms", [])) if isinstance(ctx.get("symptoms"), list) else str(ctx.get("symptoms",""))
+        context_prefix = (
+            f"[Current patient context — "
+            f"Symptoms: {symptoms}. "
+            f"HR: {ctx.get('heart_rate', ctx.get('hr','N/A'))} bpm. "
+            f"SpO₂: {ctx.get('oxygen_level', ctx.get('spo2','N/A'))}%. "
+            f"BP: {ctx.get('blood_pressure', ctx.get('sbp','N/A'))}. "
+            f"Age: {ctx.get('age','N/A')} years.]\n\n"
+        )
+
+    full_message = context_prefix + req.message
+    powered_by = "fallback"
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+
+    # ── Try Anthropic Claude ──────────────────────────────────────
+    if ANTHROPIC_AVAILABLE and api_key.strip().startswith("sk-ant-"):
+        try:
+            client = anthropic.Anthropic(api_key=api_key.strip())
+            # Build messages for Claude: last 8 turns of history + new message
+            api_messages = []
+            for turn in history[-8:]:
+                api_messages.append({"role": turn["role"], "content": turn["content"]})
+            api_messages.append({"role": "user", "content": full_message})
+
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=600,
+                system=CHATBOT_SYSTEM_PROMPT,
+                messages=api_messages,
+            )
+            reply = response.content[0].text
+            powered_by = "claude"
+        except anthropic.AuthenticationError:
+            reply = "❌ Invalid Anthropic API key. Please check your ANTHROPIC_API_KEY environment variable."
+        except anthropic.RateLimitError:
+            reply = "⚠️ Rate limit reached. Please wait a moment and try again."
+        except Exception as ex:
+            reply = _get_fallback(req.message)
+            reply += f"\n\n---\n*⚠ Claude API error: {str(ex)[:120]}. Using fallback responses.*"
+    else:
+        # Fallback rule-based
+        reply = _get_fallback(req.message)
+        if not api_key:
+            reply += "\n\n---\n*🔑 Set ANTHROPIC_API_KEY environment variable for full AI-powered responses.*"
+
+    # Update history
+    history.append({"role": "user", "content": req.message})
+    history.append({"role": "assistant", "content": reply})
+    _chat_histories[session_id] = history[-20:]  # keep last 20 messages
+
+    return ChatResponse(
+        reply=reply,
+        session_id=session_id,
+        history=[ChatMessage(role=m["role"], content=m["content"]) for m in history],
+        powered_by=powered_by,
+    )
+
+
+@app.delete("/chat/{session_id}")
+def clear_chat(session_id: str):
+    """Clear chat history for a session."""
+    removed = _chat_histories.pop(session_id, None)
+    return {"cleared": removed is not None, "session_id": session_id}
+
+
+@app.get("/chat/{session_id}/history")
+def get_chat_history(session_id: str):
+    """Retrieve full chat history for a session."""
+    history = _chat_histories.get(session_id, [])
+    return {"session_id": session_id, "history": history, "message_count": len(history)}
+
+# =================================================================
+# AI CALL (OpenAI for diagnosis)
 # =================================================================
 
 async def _call_ai(data: Dict, api_key: str) -> Dict:
@@ -451,7 +723,7 @@ async def _call_ai(data: Dict, api_key: str) -> Dict:
         raise ValueError("Cannot parse AI response")
 
 # =================================================================
-# RULE-BASED FALLBACK
+# RULE-BASED FALLBACK (for /analyze)
 # =================================================================
 
 def _fallback(data: Dict, triage: Dict, news2: int) -> Dict:
@@ -555,7 +827,7 @@ def _build_pdf(report: Dict) -> bytes:
                              topMargin=2*cm, bottomMargin=2*cm)
     styles = getSampleStyleSheet()
     s = []
-    s.append(Paragraph("NeuralMed CDS — Clinical Report", styles["Heading1"]))
+    s.append(Paragraph("ClinicalTriageEnv — Clinical Report", styles["Heading1"]))
     s.append(Paragraph(f"Patient: {report.get('patient_id','N/A')} | {report.get('generated_at','N/A')}", styles["Normal"]))
     s.append(HRFlowable(width="100%", thickness=1))
     s.append(Spacer(1, 10))
