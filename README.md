@@ -516,7 +516,7 @@ tasks:
     domain: emergency_medicine
   # ... 7 more tasks
 api:
-  base_url: https://samrudh-nux-clinicaltriageenv.hf.space
+  base_url: https://samrudh-nux-clinicaltriageEnv.hf.space
   reset_endpoint: POST /reset
   step_endpoint: POST /step
   auth: none
@@ -529,7 +529,7 @@ api:
 import gymnasium as gym
 from your_agent import ClinicalAgent
 
-env_url = "https://samrudh-nux-clinicaltriageenv.hf.space"
+env_url = "https://samrudh-nux-clinicaltriageEnv.hf.space"
 agent = ClinicalAgent(model="your-model")
 
 for task in ["triage_easy", "triage_medium", "sepsis_hard"]:
@@ -576,13 +576,13 @@ By creating an open, reproducible benchmark, we enable the AI research community
 If you use ClinicalTriageEnv in research, please cite:
 
 ```bibtex
-@software{clinicaltriageenv2025,
+@software{clinicaltriageenv2026,
   author    = {Samrudh},
   title     = {ClinicalTriageEnv: An Open Reinforcement Learning Environment for Clinical AI Safety},
-  year      = {2025},
+  year      = {2026},
   publisher = {Hugging Face},
   url       = {https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv},
-  note      = {OpenEnv 2025 Submission}
+  note      = {OpenEnv 2026 Submission}
 }
 ```
 
