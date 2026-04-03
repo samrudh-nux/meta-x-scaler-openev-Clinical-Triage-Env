@@ -24,7 +24,7 @@ short_description: Enterprise Clinical AI Training Environment — Multi-Agent T
 ### *The First Open Reinforcement Learning Environment for Clinical AI Safety*
 
 **Train · Evaluate · Benchmark · Deploy** clinical AI agents on life-critical emergency medicine scenarios — with real-time multi-agent reasoning, mortality risk scoring, and full OpenAI Gym–compatible API.
-
+[![Launch Demo](https://img.shields.io/badge/🚀%20Launch-Live%20Demo-1a6fca?style=for-the-badge)](https://samrudh-nux-clinicaltriageenv.hf.space)
 [![API Docs](https://img.shields.io/badge/📖%20Swagger-API%20Docs-009688?style=for-the-badge)](https://samrudh-nux-clinicaltriageenv.hf.space/docs)
 [![ReDoc](https://img.shields.io/badge/📄%20ReDoc-Reference-555?style=for-the-badge)](https://samrudh-nux-clinicaltriageenv.hf.space/redoc)
 [![Leaderboard](https://img.shields.io/badge/📊-Leaderboard-orange?style=for-the-badge)](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv)
