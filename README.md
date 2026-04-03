@@ -19,7 +19,7 @@ tags:
   - rl-training
 short_description: "The first OpenEnv environment where AI agents learn life-or-death clinical decisions"
 ---
-Creator - Samrudh 
+Creator - SAMRUDH 
 ---
 
 <div align="center">
