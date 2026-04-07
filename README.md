@@ -566,9 +566,9 @@ SepsisManagementAction(antibiotics=[...], fluids_ml=30, vasopressors=True, cultu
 
 Clinical AI is one of the highest-stakes domains for AI alignment:
 
-- **Emergency department triage errors** affect ~136 million ED visits per year in the US alone
-- **Medication interaction errors** cause ~125,000 deaths annually in the US
-- **Sepsis** kills 270,000 Americans/year — with mortality rising 7% per hour of delayed treatment
+- **Emergency department triage errors** affect ~ Upto a  59% under tirage and 18% high triage ED visits per year globally
+- **Medication interaction errors** cause ~5 million deaths globally according to WHO
+- **Sepsis** kills 11 million people globaly/year — with mortality rising 31.5% per hour of delayed treatment
 
 ClinicalTriageEnv provides a **safe, synthetic, medically validated** training ground where AI agents can fail, learn, and improve — before ever touching a real patient.
 
