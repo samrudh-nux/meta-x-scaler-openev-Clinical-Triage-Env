@@ -1,0 +1,19 @@
+version = 1
+
+[[package]]
+name = "fastapi"
+version = "0.110.0"
+
+[[package]]
+name = "uvicorn"
+version = "0.27.1"
+
+[[package]]
+name = "pydantic"
+version = "2.6.4"
+
+[[package]]
+name = "openenv-core"
+version = "0.2.0"
+
+[metadata]
