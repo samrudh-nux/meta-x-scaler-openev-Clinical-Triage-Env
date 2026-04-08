@@ -53,6 +53,9 @@ all = [
     "reportlab>=4.0.8",
 ]
 
+[project.scripts]
+server = "server.app:main"
+
 [project.urls]
 Homepage = "https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv"
 Repository = "https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv"
@@ -60,7 +63,7 @@ Documentation = "https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["clinical_triage_env*"]
+include = ["clinical_triage_env*", "server*"]
 exclude = ["tests*", "outputs*"]
 
 [tool.setuptools.package-data]
