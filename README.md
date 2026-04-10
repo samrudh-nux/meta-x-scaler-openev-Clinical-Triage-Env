@@ -36,7 +36,7 @@ license: mit
 
 ## Author : Samrudh
 
-## 🌍 The Problem Being solving 
+## 🌍 The Problem to be solved
 
 Emergency department triage is one of the most cognitively demanding tasks in medicine. A single wrong call — assigning a STEMI patient to the waiting room, missing bacterial meningitis, or choosing the wrong antibiotic in septic shock — can mean death within minutes.
 
