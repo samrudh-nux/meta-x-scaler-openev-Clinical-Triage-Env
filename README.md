@@ -24,7 +24,7 @@ license: mit
 <br/>
 
 > **"Every minutes, a 5 patient dies from a triage error globally.**
-> **We built an RL environment that trains AI agents to make those split-second decisions — correctly, consistently, and safely."**
+> **So building an RL environment that trains AI agents to make those split-second decisions — correctly, consistently, and safely."**
 
 <br/>
 
