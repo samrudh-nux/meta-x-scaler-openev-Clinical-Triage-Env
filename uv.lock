@@ -17,3 +17,4 @@ name = "openenv-core"
 version = "0.2.0"
 
 [metadata]
+python-version = "3.10"
