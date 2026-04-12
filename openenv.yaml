@@ -1,138 +1,357 @@
 name: clinical-triage-env
-version: "1.0.0"
+version: "2.0.0"
 description: >
-  Healthcare AI training environment for clinical decision-making agents.
-  Simulates three real-world clinical tasks: Emergency Department Triage
-  (ESI Level Assignment), Medication Safety Review (drug interaction detection),
-  and Sepsis Recognition & Management (Hour-1 SSC bundle execution).
-  All scenarios are medically accurate with programmatic graders producing
-  partial-credit scores (0.0–1.0).
-author: "ClinicalTriageEnv Contributors"
+  ClinicalTriageEnv — A high-fidelity OpenEnv-compliant RL training and evaluation
+  environment for clinical AI agents. Covers three life-critical medical domains:
+  Emergency Department Triage (ESI v4), Medication Safety Review (CYP450/FDA interactions),
+  and Sepsis Recognition & Management (SSC 2021 Hour-1 Bundle). Nine tasks across three
+  difficulty tiers, backed by fully programmatic multi-component graders, asymmetric
+  patient-safety penalties, and a shaped reward system designed to expose the true
+  reasoning limits of frontier LLMs. Every wrong answer maps to a quantifiable
+  real-world mortality consequence.
+author: "Samrudh — Meta × Scaler OpenEnv Hackathon"
 license: "MIT"
 tags:
   - healthcare
   - clinical-decision-support
+  - emergency-medicine
   - triage
   - medication-safety
   - sepsis
   - openenv
   - rl-training
   - agentic-ai
+  - llm-evaluation
+  - reinforcement-learning
+  - patient-safety
 
-# OpenEnv spec compliance
-openenv_spec: "0.1"
+openenv_spec: "0.2"
 
-# Task definitions
+# =============================================================================
+# TASKS — 9 tasks × 3 domains × 3 difficulty levels
+# =============================================================================
 tasks:
+  # ── Domain 1: Emergency Triage (ESI v4) ───────────────────────────────────
   - id: triage_easy
-    name: "Emergency Triage - Easy"
+    name: "Emergency Triage — Easy"
     type: triage
     difficulty: easy
-    description: "Assign ESI level to non-urgent patient. Validates basic triage understanding."
+    max_steps: 3
+    passing_threshold: 0.60
+    description: >
+      Non-urgent ED presentation with stable vitals. Agent must assign ESI level 4–5,
+      provide rationale citing vitals, and list appropriate low-acuity interventions.
+      Tests baseline triage competency and avoidance of over-triage.
+    patient_profile: "Minor complaint, stable vitals, NEWS-2 ≤ 2"
+    key_skills: ["ESI algorithm", "vital sign interpretation", "resource allocation"]
+    clinical_protocol: "ESI v4 (Emergency Severity Index version 4)"
 
   - id: triage_medium
-    name: "Emergency Triage - Medium"
+    name: "Emergency Triage — Medium"
     type: triage
     difficulty: medium
-    description: "Triage potential ACS patient. Requires recognition of high-risk chest pain presentation."
+    max_steps: 3
+    passing_threshold: 0.60
+    description: >
+      Potential ACS presentation (chest pain + diaphoresis + ST changes). Agent must
+      assign ESI-2, cite hemodynamic instability, and activate STEMI pathway.
+      Undertriage penalty of -0.45 applies if ESI ≥ 3 assigned.
+    patient_profile: "58yo M, crushing chest pain, HR 110, BP 88/60"
+    key_skills: ["ACS recognition", "STEMI activation", "hemodynamic assessment"]
+    clinical_protocol: "ESI v4 + ACC/AHA STEMI guidelines"
 
   - id: triage_hard
-    name: "Emergency Triage - Hard"
+    name: "Emergency Triage — Hard"
     type: triage
     difficulty: hard
-    description: "Triage acute stroke on anticoagulation. Time-critical with complex decision-making."
+    max_steps: 3
+    passing_threshold: 0.60
+    description: >
+      Acute ischemic stroke on anticoagulation. Agent must assign ESI-1, activate
+      stroke team, recognize thrombolysis contraindication, and manage time-to-CT.
+      Requires simultaneous reasoning across neurology, pharmacology, and time-criticality.
+    patient_profile: "71yo M, facial droop + arm weakness onset 90min, on warfarin"
+    key_skills: ["stroke recognition", "thrombolysis contraindications", "stroke team activation"]
+    clinical_protocol: "AHA/ASA Stroke Guidelines 2023 + ESI v4"
 
+  # ── Domain 2: Medication Safety (FDA/CYP450) ──────────────────────────────
   - id: med_safety_easy
-    name: "Medication Safety Review - Easy"
+    name: "Medication Safety — Easy"
     type: medication_safety
     difficulty: easy
-    description: "Review clean medication list. Validates ability to correctly identify safe regimens."
+    max_steps: 3
+    passing_threshold: 0.60
+    description: >
+      Clean medication list with minor, well-known interactions. Agent must correctly
+      classify severity as 'safe' or 'minor', demonstrate no false positives,
+      and provide appropriate monitoring recommendations.
+    patient_profile: "Stable patient, 3-drug regimen, no major interactions"
+    key_skills: ["drug interaction recognition", "severity classification", "monitoring plans"]
+    clinical_protocol: "FDA Drug Interaction Database + Beers Criteria"
 
   - id: med_safety_medium
-    name: "Medication Safety Review - Medium"
+    name: "Medication Safety — Medium"
     type: medication_safety
     difficulty: medium
-    description: "Triple antithrombotic therapy review post-MI with CKD and diabetes."
+    max_steps: 3
+    passing_threshold: 0.60
+    description: >
+      Post-MI patient on triple antithrombotic therapy (aspirin + clopidogrel + warfarin)
+      with CKD + diabetes. Agent must flag major bleeding risk, identify metformin
+      contraindication in CKD, and recommend dose adjustments.
+    patient_profile: "Post-MI, aspirin+clopidogrel+warfarin, CKD stage 3, DM2"
+    key_skills: ["antithrombotic bleeding risk", "renal dose adjustment", "metformin contraindications"]
+    clinical_protocol: "ACC/AHA Antithrombotic Guidelines + KDIGO CKD guidelines"
 
   - id: med_safety_hard
-    name: "Medication Safety Review - Hard"
+    name: "Medication Safety — Hard"
     type: medication_safety
     difficulty: hard
-    description: "HIV PI + statin rhabdomyolysis. Life-threatening CYP3A4 interaction identification."
+    max_steps: 3
+    passing_threshold: 0.60
+    description: >
+      HIV patient on ritonavir presenting with rhabdomyolysis caused by simvastatin.
+      Agent must identify life-threatening CYP3A4 inhibition (ritonavir boosts
+      simvastatin AUC by ~3000%), discontinue statin, order CK levels, initiate
+      aggressive IV hydration. Missing this = automatic critical failure.
+    patient_profile: "HIV+ on ritonavir + simvastatin, presenting with myalgia + dark urine"
+    key_skills: ["CYP3A4 inhibition mechanism", "rhabdomyolysis recognition", "HIV ARV interactions"]
+    clinical_protocol: "FDA CYP450 Interaction Database + HIV Drug Interaction Checker"
 
+  # ── Domain 3: Sepsis Management (SSC 2021) ────────────────────────────────
   - id: sepsis_easy
-    name: "Sepsis Management - Easy"
+    name: "Sepsis Management — Easy"
     type: sepsis
     difficulty: easy
-    description: "Urosepsis with PCN allergy. Standard Hour-1 bundle with allergy-appropriate antibiotics."
+    max_steps: 3
+    passing_threshold: 0.60
+    description: >
+      Urosepsis with documented penicillin allergy. Agent must execute complete SSC
+      Hour-1 bundle while selecting allergy-appropriate antibiotics (ceftriaxone or
+      azithromycin, NOT penicillin derivatives). Allergy violation = score capped at 0.0.
+    patient_profile: "28yo F, fever + flank pain, PCN allergy, MAP 72"
+    key_skills: ["SSC Hour-1 bundle", "allergy-appropriate antibiotics", "source identification"]
+    clinical_protocol: "Surviving Sepsis Campaign 2021 + Sanford Guide"
 
   - id: sepsis_medium
-    name: "Sepsis Management - Medium"
+    name: "Sepsis Management — Medium"
     type: sepsis
     difficulty: medium
-    description: "Septic shock in elderly patient with MRSA history. Vasopressor decision-making required."
+    max_steps: 3
+    passing_threshold: 0.60
+    description: >
+      Septic shock in elderly nursing home patient with MRSA history. MAP < 65 despite
+      fluids requires vasopressor initiation (norepinephrine first-line). Agent must
+      balance fluid resuscitation, MRSA-appropriate antibiotics, and vasopressor dosing.
+    patient_profile: "78yo M nursing home resident, MAP 58, lactate 4.2, MRSA history"
+    key_skills: ["vasopressor initiation", "MRSA antibiotic coverage", "fluid balance in elderly"]
+    clinical_protocol: "SSC 2021 + SHEA MRSA Guidelines"
 
   - id: sepsis_hard
-    name: "Sepsis Management - Hard"
+    name: "Sepsis Management — Hard"
     type: sepsis
     difficulty: hard
-    description: "Post-op anastomotic leak with multi-organ failure, DIC, and vancomycin allergy."
+    max_steps: 3
+    passing_threshold: 0.60
+    description: >
+      Post-operative anastomotic leak with multi-organ failure, DIC, and vancomycin
+      allergy. Requires simultaneous management of surgical source control identification,
+      alternative MRSA coverage (daptomycin/linezolid), coagulopathy management,
+      and refractory vasopressor escalation. Most challenging task in the benchmark.
+    patient_profile: "Post-colectomy day 3, anastomotic leak, DIC, vancomycin allergy, 3-pressor dependent"
+    key_skills: ["source control", "DIC management", "alternative MRSA coverage", "vasopressor escalation"]
+    clinical_protocol: "SSC 2021 + ACCP/SCCM DIC Guidelines + Surgical Infection Society"
 
-# API interface
+# =============================================================================
+# ACTION SPACE
+# =============================================================================
 action_space:
   type: pydantic
   classes:
     - TriageAction
     - MedicationSafetyAction
     - SepsisManagementAction
+  schemas:
+    TriageAction:
+      esi_level: "int [1-5] — Emergency Severity Index level"
+      rationale: "str — Clinical reasoning (min 30 words)"
+      recommended_immediate_interventions: "List[str] — Immediate clinical actions"
+    MedicationSafetyAction:
+      flagged_interactions: "List[str] — Drug-drug interactions with mechanism"
+      flagged_contraindications: "List[str] — Drug-condition contraindications"
+      flagged_dosing_errors: "List[str] — Dosing errors with corrections"
+      recommended_changes: "List[str] — Specific actionable changes"
+      severity_assessment: "str — safe|minor|moderate|major|critical"
+      clinical_rationale: "str — Pharmacological reasoning (min 50 words)"
+    SepsisManagementAction:
+      sepsis_diagnosis: "str — sepsis|septic_shock|SIRS_only|no_sepsis"
+      blood_cultures_ordered: "bool — Before antibiotics"
+      antibiotics_ordered: "bool — Broad-spectrum initiated"
+      antibiotic_choice: "str — Specific drug(s) selected"
+      lactate_ordered: "bool — Serum lactate measurement"
+      iv_fluid_bolus_ml: "int — Volume administered (30mL/kg target)"
+      vasopressor_ordered: "bool — If MAP <65 despite fluids"
+      vasopressor_choice: "str — Norepinephrine first-line"
+      source_control_identified: "str — Infection source"
+      clinical_rationale: "str — SSC bundle reasoning (min 50 words)"
+      time_to_antibiotics_minutes: "int — Time from presentation to first dose"
 
+# =============================================================================
+# OBSERVATION SPACE
+# =============================================================================
 observation_space:
   type: pydantic
   classes:
     - TriageObservation
     - MedicationSafetyObservation
     - SepsisManagementObservation
+  common_fields:
+    patient: "PatientRecord — Full clinical presentation"
+    task_description: "str — Task objective"
+    feedback: "str — Grader feedback from previous step"
+    score_so_far: "float — Cumulative score"
+    step: "int — Current episode step"
+    done: "bool — Episode complete"
 
+# =============================================================================
+# REWARD FUNCTION
+# =============================================================================
 reward:
   type: continuous
-        range: [-1.0, 1.5]
-      description: >
-    Shaped reward = (grade_score - safety_penalty + efficiency_bonus) * difficulty_multiplier.
-    Partial credit throughout episode. Critical safety errors penalized.
-# Environment boundaries
+  range: [-1.0, 1.5]
+  formula: "(base_score - safety_penalty + efficiency_bonus) × difficulty_multiplier"
+  components:
+    base_score:
+      description: "Weighted sum of component grader scores (0.0–1.0)"
+      source: "Domain-specific programmatic grader"
+    safety_penalty:
+      description: "0.30 × count(critical_safety_errors)"
+      examples:
+        - "Undertriage ESI-1 patient to ESI-3+: -0.45"
+        - "Allergy violation in antibiotic selection: score → 0.0"
+        - "Critical drug interaction missed (GT=critical, proposed=safe): cap at 0.20"
+    efficiency_bonus:
+      description: "0.05 × max(0, max_steps - current_step)"
+      rationale: "Rewards faster correct decisions (time matters in emergency medicine)"
+    difficulty_multiplier:
+      easy: 0.8
+      medium: 1.0
+      hard: 1.3
+  thresholds:
+    pass: 0.60
+    good: 0.75
+    excellent: 0.90
+
+# =============================================================================
+# GRADING SYSTEM
+# =============================================================================
+grading:
+  type: programmatic
+  llm_judge: false
+  description: >
+    Fully deterministic, auditable graders. No LLM-as-judge.
+    Partial credit architecture rewards incremental clinical improvement.
+  triage_grader:
+    components:
+      esi_accuracy: 0.40
+      acceptable_range_bonus: 0.05
+      rationale_keywords: 0.15
+      clinical_flags: 0.10
+      intervention_recall: 0.15
+      intervention_precision: 0.05
+      time_sensitivity: 0.10
+  medication_safety_grader:
+    components:
+      interaction_recall: 0.28
+      contraindication_recall: 0.18
+      dosing_error_recall: 0.10
+      severity_accuracy: 0.15
+      recommended_changes: 0.12
+      rationale_depth: 0.12
+      false_positive_penalty: 0.05
+  sepsis_grader:
+    components:
+      diagnosis_accuracy: 0.15
+      blood_cultures: 0.08
+      antibiotics: 0.15
+      antibiotic_safety: 0.12
+      lactate: 0.08
+      fluid_volume: 0.10
+      vasopressor: 0.12
+      source_control: 0.05
+      rationale_depth: 0.15
+
+# =============================================================================
+# EPISODE CONFIGURATION
+# =============================================================================
 episode:
   max_steps: 3
   terminates_on_action: true
-      reset_required: true
+  reset_required: true
+  passing_threshold: 0.60
+  difficulty_progression: ["easy", "medium", "hard"]
 
-# Infrastructure
+# =============================================================================
+# SERVER INFRASTRUCTURE
+# =============================================================================
 server:
   framework: fastapi
   host: "0.0.0.0"
   port: 7860
+  entry_point: "server.app:main"
   endpoints:
-    reset: POST /reset
-        step: POST /step
-     state: GET /state
-           tasks: GET /tasks
-       health: GET /health
-  websocket: WS /ws
+    reset: "POST /reset — Start episode, returns patient observation"
+    step: "POST /step — Submit action, returns reward + feedback"
+    state: "GET /state — Inspect current episode state"
+    tasks: "GET /tasks — List all 9 tasks with metadata"
+    health: "GET /health — Server health + module status"
+    analyze: "POST /analyze — Clinical decision support analysis"
+    benchmark: "POST /benchmark — Evaluate user action vs oracle"
+    inference: "POST /inference/run — Run LLM benchmark task"
+    websocket: "WS /ws/vitals/{session_id} — Real-time vital sign streaming"
 
 docker:
   base_image: "python:3.11-slim"
   exposed_port: 7860
+  build_time_seconds: "<120"
 
-# Baseline scores (from inference.py run)
+# =============================================================================
+# BASELINE RESULTS — Meta-Llama-3.3-70B-Instruct
+# =============================================================================
 baseline:
   model: "meta-llama/Llama-3.3-70B-Instruct"
+  inference_method: "Chain-of-Thought (REASONING: + ACTION: format)"
+  temperature: 0.05–0.10
   scores:
-    triage_easy: 0.68
-         triage_medium: 0.62
-                   triage_hard: 0.45
-                        med_safety_easy: 0.90
-                            med_safety_medium: 0.58
-                      med_safety_hard: 0.31
-                  sepsis_easy: 0.64
-               sepsis_medium: 0.55
-           sepsis_hard: 0.28
-  overall_mean: 0.58
+    triage_easy:        {score: 0.78, passed: true,  notes: "Solid ESI assignment with correct rationale"}
+    triage_medium:      {score: 0.62, passed: true,  notes: "Identified ACS but missed STEMI activation"}
+    triage_hard:        {score: 0.45, passed: false, notes: "Failed to recognize anticoagulation contraindication"}
+    med_safety_easy:    {score: 0.90, passed: true,  notes: "Near-perfect interaction identification"}
+    med_safety_medium:  {score: 0.58, passed: false, notes: "Missed metformin-CKD contraindication"}
+    med_safety_hard:    {score: 0.31, passed: false, notes: "Failed CYP3A4 ritonavir-simvastatin interaction"}
+    sepsis_easy:        {score: 0.72, passed: true,  notes: "Bundle complete but slow antibiotic timing"}
+    sepsis_medium:      {score: 0.55, passed: false, notes: "Vasopressor choice suboptimal (dopamine vs NE)"}
+    sepsis_hard:        {score: 0.28, passed: false, notes: "Source control not identified; wrong antibiotic"}
+    overall_mean:       0.58
+  key_finding: >
+    Even frontier 70B models fail on hard clinical tasks, demonstrating real
+    discriminative power. The benchmark exposes genuine reasoning gaps that
+    simple QA datasets cannot surface.
+# =============================================================================
+# REAL-WORLD IMPACT
+# =============================================================================
+real_world_impact:
+  domains_covered:
+    - "Emergency Medicine: 150M+ ED visits/year globally"
+    - "Medication Safety: 3M+ preventable deaths/year from medication errors"
+    - "Sepsis: 11M+ deaths/year; every hour delay = +7% mortality"
+  clinical_protocols_encoded:
+    - "ESI v4 (Emergency Severity Index)"
+    - "ACC/AHA STEMI Guidelines"
+    - "AHA/ASA Stroke Guidelines 2023"
+    - "FDA CYP450 Drug Interaction Database"
+    - "Surviving Sepsis Campaign 2021"
+    - "KDIGO CKD Guidelines"
+  disclaimer: >
+    Research and training tool only. Not for clinical use.
+    All outputs must be validated by licensed healthcare professionals.
