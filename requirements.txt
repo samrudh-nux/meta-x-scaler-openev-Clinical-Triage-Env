@@ -1,9 +1,13 @@
-openenv-core>=0.2.0
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-python-multipart==0.0.6
-httpx==0.25.2
-anthropic>=0.20.0
-openai>=1.10.0
+openenv-core==0.2.3
+
+# Web server
+fastapi
+uvicorn
+python-multipart
+pydantic>=2.0.0
+
+# PDF generation — openenv-core does not touch reportlab
 reportlab==4.0.8
+
+# Anthropic client
+anthropic>=0.20.0
