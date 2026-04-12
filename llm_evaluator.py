@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-# 
-# STANDARD LIBRARY
-#
+
 
 import os
 import json
@@ -18,9 +16,7 @@ from dataclasses import dataclass, asdict, field
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
-#
-# OPTIONAL DEPENDENCIES  (degrade gracefully if absent)
-#
+
 
 try:
     from enum import StrEnum  # Python 3.11+
