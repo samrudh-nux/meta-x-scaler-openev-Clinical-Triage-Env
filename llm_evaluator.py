@@ -48,9 +48,6 @@ DEFAULT_ALPHA: float = 0.30   # 30% LLM influence on final reward by default
 MAX_WORKERS: int     = 4      # Thread pool size for batch evaluation
 CACHE_MAX_SIZE: int  = 512    # LRU cache entries
 
-# ──────────────────────────────────────────────────────────────────────────────
-# OUTPUT SCHEMA
-# ──────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class LLMEvalResult:
@@ -64,7 +61,7 @@ class LLMEvalResult:
         result = evaluate_with_llm(state, action, reasoning)
         final_reward = rule_reward + alpha * result.reward_adjustment
     """
-    # ── Clinical dimensions ──────────────────────────────────────────────────
+    # ── Clinical dimensions ──────────────────────────────────
     clinical_score:   int    # Correctness vs. evidence-based guidelines (0–10)
     safety_score:     int    # Patient safety (0=lethal decision, 10=fully safe)
     efficiency_score: int    # Resource allocation / timing efficiency (0–10)
@@ -72,11 +69,11 @@ class LLMEvalResult:
     reasoning_score:  int    # Medical coherence of provided free-text (0–10)
     total_score:      int    # Weighted aggregate — see formula below (0–10)
 
-    # ── RL integration ───────────────────────────────────────────────────────
+    # ── RL integration ───────────
     reward_adjustment: float # Additive delta: [-0.5, +0.5]
     confidence:        float # LLM self-assessed confidence [0.0, 1.0]
 
-    # ── Explainability ───────────────────────────────────────────────────────
+    # ── Explainability ──────────────────────────
     explanation:      str    # Human-readable 2–3 sentence clinical critique
     teaching_point:   str    # One-line educational takeaway (may be empty)
     oracle_deviation: str    # How this decision differed from the oracle (may be empty)
@@ -86,7 +83,7 @@ class LLMEvalResult:
     latency_ms:       int    # End-to-end inference latency in milliseconds
     cache_hit:        bool   # True if served from LRU cache
 
-    # ── Grader integration ───────────────────────────────────────────────────
+    # ── Grader integration ─────────
     grader_alignment: float  # Correlation with GradeResult.score from graders.py [0,1]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -112,9 +109,6 @@ class LLMEvalResult:
         )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ROLLING METRICS  (thread-safe telemetry for the /health endpoint)
-# ──────────────────────────────────────────────────────────────────────────────
 
 class EvaluatorMetrics:
     """
@@ -164,9 +158,6 @@ class EvaluatorMetrics:
 METRICS = EvaluatorMetrics()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# LRU PROMPT CACHE  (skip identical prompts during RL roll-outs)
-# ──────────────────────────────────────────────────────────────────────────────
 
 class _EvaluatorCache:
     """Thread-safe LRU cache keyed on prompt SHA-256."""
@@ -200,9 +191,6 @@ class _EvaluatorCache:
 _CACHE = _EvaluatorCache()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# SYSTEM PROMPT
-# ──────────────────────────────────────────────────────────────────────────────
 
 EVAL_SYSTEM_PROMPT = """You are an expert clinical AI evaluator embedded in a reinforcement learning
 training system for emergency department triage and acute care. Your role is to evaluate AI agent
@@ -255,9 +243,6 @@ Keys must match EXACTLY:
   total_score, reward_adjustment, confidence, explanation, teaching_point"""
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# PROMPT BUILDER
-# ──────────────────────────────────────────────────────────────────────────────
 
 def build_eval_prompt(
     state:     Dict[str, Any],
@@ -356,9 +341,6 @@ Return a valid JSON object with EXACTLY these keys:
 }}"""
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# LLM BACKENDS  (modular, swappable, each independently testable)
-# ──────────────────────────────────────────────────────────────────────────────
 
 def _http_post(url: str, payload: Dict, headers: Dict, timeout: int = 15) -> Dict:
     """Thin urllib wrapper used by all backends to avoid httpx/requests dependency."""
@@ -493,10 +475,6 @@ def _call_openai_gpt4(prompt: str) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# RULE-BASED FALLBACK EVALUATOR  (zero-dependency, always available)
-# ──────────────────────────────────────────────────────────────────────────────
-
 def _rule_based_eval(
     state:     Dict[str, Any],
     action:    Dict[str, Any],
@@ -515,7 +493,6 @@ def _rule_based_eval(
     vitals    = patient.get("vitals", {})
     expected  = state.get("expected_action", {})
 
-    # ── Base scores ──────────────────────────────────────────────────────────
     clinical_score:   int   = 5
     safety_score:     int   = 7
     efficiency_score: int   = 6
@@ -523,7 +500,6 @@ def _rule_based_eval(
     explanation_parts: List[str] = []
     teaching_point:    str   = ""
 
-    # ── Reasoning quality (length proxy) ────────────────────────────────────
     word_count       = len(reasoning.split()) if reasoning else 0
     reasoning_score: int = min(10, max(0, word_count // 10))
 
@@ -533,9 +509,6 @@ def _rule_based_eval(
             return vitals.get(key, default)
         return getattr(vitals, key, default)
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # TASK 1: TRIAGE
-    # ═════════════════════════════════════════════════════════════════════════
     if task_type == "triage":
         agent_esi   = action.get("esi_level", action.get("triage_level", 0)) or 0
         correct_esi = expected.get("esi_level", 3)
@@ -594,9 +567,6 @@ def _rule_based_eval(
             "Apply ESI algorithm: resource needs + vital sign abnormalities drive level."
         )
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # TASK 2: MEDICATION SAFETY
-    # ═════════════════════════════════════════════════════════════════════════
     elif task_type == "medication_safety":
         flags_identified  = action.get("drug_interactions_identified",
                              action.get("flagged_interactions", []))
@@ -636,9 +606,6 @@ def _rule_based_eval(
             "simvastatin and lovastatin are CONTRAINDICATED with HIV protease inhibitors."
         )
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # TASK 3: SEPSIS MANAGEMENT
-    # ═════════════════════════════════════════════════════════════════════════
     elif task_type == "sepsis":
         bundle_items    = action.get("bundle_items", [])
         abx_ordered     = action.get("antibiotics_ordered", False)
@@ -765,9 +732,6 @@ def _rule_based_eval(
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# RESPONSE PARSER  (robust JSON extraction + field validation)
-# ──────────────────────────────────────────────────────────────────────────────
 
 def _parse_llm_response(raw: str) -> Dict[str, Any]:
     """
@@ -834,9 +798,6 @@ def _parse_llm_response(raw: str) -> Dict[str, Any]:
     return data
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# BACKEND DISPATCH TABLE
-# ──────────────────────────────────────────────────────────────────────────────
 
 _BACKEND_CALLERS = {
     LLMBackend.LLAMA3_GROQ:     _call_groq_llama3,
@@ -852,10 +813,6 @@ _PRIORITY_ORDER: List[LLMBackend] = [
     LLMBackend.GPT4,
 ]
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# PRIMARY PUBLIC FUNCTION
-# ──────────────────────────────────────────────────────────────────────────────
 
 def evaluate_with_llm(
     state:          Dict[str, Any],
@@ -981,9 +938,6 @@ def evaluate_with_llm(
     return result
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# BATCH EVALUATOR  (parallel evaluation for multi-patient episodes)
-# ──────────────────────────────────────────────────────────────────────────────
 
 class BatchEvaluator:
     """
@@ -1043,10 +997,6 @@ class BatchEvaluator:
 BATCH_EVALUATOR = BatchEvaluator()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ORACLE / "WHAT WOULD A DOCTOR DO?" MODE
-# ──────────────────────────────────────────────────────────────────────────────
-
 def get_oracle_action(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Return the heuristic gold-standard physician action for a given state.
@@ -1068,9 +1018,6 @@ def get_oracle_action(state: Dict[str, Any]) -> Dict[str, Any]:
             return vitals.get(key, default)
         return getattr(vitals, key, default)
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # TRIAGE ORACLE
-    # ═════════════════════════════════════════════════════════════════════════
     if task_type == "triage":
         spo2 = _v("spo2", 100)
         sbp  = _v("systolic_bp", 120)
@@ -1127,10 +1074,6 @@ def get_oracle_action(state: Dict[str, Any]) -> Dict[str, Any]:
                             "Fast Track", "Waiting Area"][esi - 1],
             "oracle": True,
         }
-
-    # ═════════════════════════════════════════════════════════════════════════
-    # MEDICATION SAFETY ORACLE
-    # ═════════════════════════════════════════════════════════════════════════
     elif task_type == "medication_safety":
         meds = [
             (m.get("name", "").lower() if isinstance(m, dict) else str(m).lower())
@@ -1191,9 +1134,6 @@ def get_oracle_action(state: Dict[str, Any]) -> Dict[str, Any]:
             "oracle": True,
         }
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # SEPSIS ORACLE  (SSC 2021 Hour-1 Bundle)
-    # ═════════════════════════════════════════════════════════════════════════
     elif task_type == "sepsis":
         sbp  = _v("systolic_bp", 120)
         dbp  = _v("diastolic_bp", 80)
@@ -1292,9 +1232,6 @@ def _triage_interventions(esi: int, vitals: Any, _v) -> List[str]:
     return interventions
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# REWARD INTEGRATION
-# ──────────────────────────────────────────────────────────────────────────────
 
 def compute_hybrid_reward(
     rule_reward:  float,
@@ -1355,9 +1292,6 @@ def compute_hybrid_reward(
     return final_reward, breakdown
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ASYNC WRAPPER  (for FastAPI / async training loops)
-# ──────────────────────────────────────────────────────────────────────────────
 
 async def evaluate_with_llm_async(
     state:         Dict[str, Any],
@@ -1383,9 +1317,6 @@ async def evaluate_with_llm_async(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# SELF-TEST  (python llm_evaluator.py)
-# ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
