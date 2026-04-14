@@ -37,7 +37,7 @@ tags:
 
 **9 clinical tasks · 3 medical domains · Real graders · LLM reward shaping · Zero hallucination tolerance**
 
-[**▶ Live Demo**](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv) · [**API Docs**](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv4u/docs) · [**GitHub**](https://github.com/samrudh-nux/meta-x-scaler-openev-Clinical-Triage-Env)
+[**▶ Live Demo**](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv) · [**API Docs**](https://samrudh-nux-clinicaltriageenv.hf.space/docs) · [**GitHub**](https://github.com/samrudh-nux/meta-x-scaler-openev-Clinical-Triage-Env)
 
 </div>
 
