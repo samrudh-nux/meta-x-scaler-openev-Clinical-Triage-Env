@@ -6,9 +6,7 @@
 <title>ClinicalTriageEnv v5 — RL Clinical AI Platform</title>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;1,9..144,400&display=swap" rel="stylesheet">
 <style>
-/* ═══════════════════════════════════════════════
-   ROOT — Pure Clinical White
-═══════════════════════════════════════════════ */
+
 :root{
   --bg:#f7f8fc;
   --surface:#ffffff;
@@ -86,17 +84,11 @@ body::before{
 
 button,select,textarea,input{font-family:var(--sans);}
 
-/* ═══════════════════════════════════════════════
-   SCROLLBAR
-═══════════════════════════════════════════════ */
 ::-webkit-scrollbar{width:5px;height:5px;}
 ::-webkit-scrollbar-track{background:var(--surface2);}
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
 ::-webkit-scrollbar-thumb:hover{background:var(--border3);}
 
-/* ═══════════════════════════════════════════════
-   TOPBAR
-═══════════════════════════════════════════════ */
 .topbar{
   height:56px;
   background:rgba(255,255,255,.97);
@@ -162,24 +154,15 @@ button,select,textarea,input{font-family:var(--sans);}
   display:none;
 }
 
-/* ═══════════════════════════════════════════════
-   VIEWS + LAYOUT
-═══════════════════════════════════════════════ */
 .view{display:none;padding:22px 24px 80px;max-width:1600px;margin:0 auto;position:relative;z-index:1;}
 .view.active{display:block;}
 
-/* ═══════════════════════════════════════════════
-   PAGE HEADER
-═══════════════════════════════════════════════ */
 .page-hdr{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px;}
 .page-hdr-left h1{font-family:var(--display);font-size:24px;font-weight:400;font-style:italic;color:var(--text);letter-spacing:-.02em;}
 .page-hdr-left h1 em{color:var(--blue);font-style:italic;}
 .page-hdr-left p{font-size:10px;color:var(--text4);margin-top:3px;font-family:var(--mono);letter-spacing:.04em;}
 .page-hdr-right{display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
 
-/* ═══════════════════════════════════════════════
-   BUTTONS
-═══════════════════════════════════════════════ */
 .btn{
   font-size:11px;font-weight:600;border-radius:var(--r8);
   display:inline-flex;align-items:center;gap:5px;
@@ -199,9 +182,6 @@ button,select,textarea,input{font-family:var(--sans);}
 .btn-sm{padding:5px 11px;font-size:10.5px;}
 .btn-xs{padding:3px 7px;font-size:9.5px;}
 
-/* ═══════════════════════════════════════════════
-   STAT CARDS ROW
-═══════════════════════════════════════════════ */
 .stats-row{display:grid;grid-template-columns:repeat(7,1fr);gap:9px;margin-bottom:20px;}
 .stat-card{
   background:var(--surface);border:1px solid var(--border);
@@ -224,9 +204,6 @@ button,select,textarea,input{font-family:var(--sans);}
 .sc-label{font-size:9px;color:var(--text4);font-weight:600;text-transform:uppercase;letter-spacing:.08em;font-family:var(--mono);}
 .c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-red{color:var(--red)}.c-amber{color:var(--amber)}.c-teal{color:var(--teal)}.c-slate{color:var(--slate)}
 
-/* ═══════════════════════════════════════════════
-   CARD
-═══════════════════════════════════════════════ */
 .card{
   background:var(--surface);border:1px solid var(--border);
   border-radius:var(--r12);box-shadow:var(--shadow-xs);
@@ -241,9 +218,6 @@ button,select,textarea,input{font-family:var(--sans);}
 .card-hdr-title{font-size:9.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;font-family:var(--mono);}
 .card-body{padding:16px;}
 
-/* ═══════════════════════════════════════════════
-   KEYFRAMES
-═══════════════════════════════════════════════ */
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.6)}}
 @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slideIn{from{opacity:0;transform:translateX(-5px)}to{opacity:1;transform:translateX(0)}}
@@ -255,9 +229,6 @@ button,select,textarea,input{font-family:var(--sans);}
 @keyframes wave{from{height:2px}to{height:var(--wh,14px)}}
 @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
 
-/* ═══════════════════════════════════════════════
-   VOICE BAR
-═══════════════════════════════════════════════ */
 .voice-bar{
   background:linear-gradient(135deg,rgba(24,97,240,.02),rgba(10,143,122,.015));
   border:1px solid rgba(24,97,240,.1);
@@ -340,9 +311,6 @@ button,select,textarea,input{font-family:var(--sans);}
 }
 .vr-actions{display:flex;gap:7px;margin-top:10px;}
 
-/* ═══════════════════════════════════════════════
-   PATIENT BOARD
-═══════════════════════════════════════════════ */
 .board-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px;}
 .pt-card{
   background:var(--surface);border:1px solid var(--border);
@@ -419,9 +387,6 @@ button,select,textarea,input{font-family:var(--sans);}
 .pt-btn-ghost{background:transparent;color:var(--text2);border-color:var(--border2);}
 .pt-btn-ghost:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg);}
 
-/* ═══════════════════════════════════════════════
-   DETAIL VIEW
-═══════════════════════════════════════════════ */
 .detail-grid{display:grid;grid-template-columns:340px 1fr;gap:14px;}
 .detail-left,.detail-right{display:flex;flex-direction:column;gap:11px;}
 .back-link{
@@ -584,9 +549,6 @@ button,select,textarea,input{font-family:var(--sans);}
 .det-alert.show{display:block;}
 .det-alert-title{font-size:11.5px;font-weight:700;color:var(--red);margin-bottom:5px;font-family:var(--mono);}
 
-/* ═══════════════════════════════════════════════
-   AI vs AI
-═══════════════════════════════════════════════ */
 .agents-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;}
 .agent-card{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r12);padding:15px;box-shadow:var(--shadow-xs);position:relative;}
 .agent-card.winner{border-color:var(--green);box-shadow:0 0 0 1px var(--green-mid),var(--shadow-sm);}
@@ -606,14 +568,8 @@ button,select,textarea,input{font-family:var(--sans);}
 .ab-val{font-size:8.5px;font-family:var(--mono);font-weight:700;min-width:28px;text-align:right;}
 .agent-reasoning{font-size:9.5px;color:var(--text2);line-height:1.5;margin-top:9px;padding:7px;background:var(--surface2);border-radius:var(--r6);border:1px solid var(--border);}
 
-/* ═══════════════════════════════════════════════
-   ANALYTICS
-═══════════════════════════════════════════════ */
 .analytics-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 
-/* ═══════════════════════════════════════════════
-   LEADERBOARD
-═══════════════════════════════════════════════ */
 .lb-row{display:grid;grid-template-columns:28px 1fr 48px 58px;gap:11px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--border);}
 .lb-row.highlight{background:var(--blue-bg);}
 .lb-rank{font-size:12px;font-weight:700;color:var(--text4);text-align:center;font-family:var(--mono);}
@@ -625,9 +581,6 @@ button,select,textarea,input{font-family:var(--sans);}
 .lb-tasks{font-size:9.5px;color:var(--text4);text-align:center;font-weight:700;font-family:var(--mono);}
 .lb-score{font-family:var(--mono);font-size:13px;font-weight:700;text-align:right;}
 
-/* ═══════════════════════════════════════════════
-   CHAT
-═══════════════════════════════════════════════ */
 .chat-layout{display:grid;grid-template-columns:280px 1fr;gap:14px;height:calc(100vh - 150px);min-height:580px;}
 .chat-sidebar{display:flex;flex-direction:column;gap:11px;}
 .chat-main{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:var(--r12);box-shadow:var(--shadow-xs);overflow:hidden;}
@@ -704,9 +657,6 @@ button,select,textarea,input{font-family:var(--sans);}
 }
 .chat-chip:hover{background:var(--blue-bg);border-color:var(--blue-mid);color:var(--blue);}
 
-/* ═══════════════════════════════════════════════
-   API REFERENCE
-═══════════════════════════════════════════════ */
 .api-layout{display:grid;grid-template-columns:260px 1fr;gap:14px;}
 .endpoint-btn{
   display:flex;align-items:center;gap:8px;
@@ -738,9 +688,6 @@ button,select,textarea,input{font-family:var(--sans);}
 .try-it-box{background:var(--blue-bg);border:1px solid var(--blue-mid);border-radius:var(--r10);padding:14px;margin-top:12px;}
 .try-result{background:#0f172a;color:#86efac;border-radius:var(--r8);padding:12px;font-family:var(--mono);font-size:10px;margin-top:10px;white-space:pre-wrap;max-height:240px;overflow-y:auto;display:none;}
 
-/* ═══════════════════════════════════════════════
-   RESPONSIVE
-═══════════════════════════════════════════════ */
 @media(max-width:1100px){.stats-row{grid-template-columns:repeat(4,1fr);}}
 @media(max-width:900px){
   .chat-layout,.detail-grid,.api-layout{grid-template-columns:1fr;}
@@ -754,7 +701,6 @@ button,select,textarea,input{font-family:var(--sans);}
 </head>
 <body>
 
-<!-- ══════════════════════════ TOPBAR ══════════════════════════ -->
 <header class="topbar">
   <div class="logo">
     <div class="logo-mark">
@@ -780,7 +726,6 @@ button,select,textarea,input{font-family:var(--sans);}
   </div>
 </header>
 
-<!-- ══════════════════════════ ICU BOARD ══════════════════════════ -->
 <div class="view active" id="view-icu">
   <div class="page-hdr">
     <div class="page-hdr-left">
@@ -855,7 +800,6 @@ button,select,textarea,input{font-family:var(--sans);}
   <div class="board-grid" id="board"></div>
 </div>
 
-<!-- ══════════════════════════ DETAIL ══════════════════════════ -->
 <div class="view" id="view-detail">
   <button class="back-link" onclick="navTo('icu',document.querySelectorAll('.tn')[0])">← Back to ICU Board</button>
   <div id="detail-body">
@@ -866,7 +810,6 @@ button,select,textarea,input{font-family:var(--sans);}
   </div>
 </div>
 
-<!-- ══════════════════════════ AI vs AI ══════════════════════════ -->
 <div class="view" id="view-aivai">
   <div class="page-hdr">
     <div class="page-hdr-left"><h1>AI vs AI <em>Benchmark</em></h1><p>Compare agents across 9 tasks · Llama 3 70B optimal baseline</p></div>
@@ -893,7 +836,6 @@ button,select,textarea,input{font-family:var(--sans);}
   </div>
 </div>
 
-<!-- ══════════════════════════ ANALYTICS ══════════════════════════ -->
 <div class="view" id="view-analytics">
   <div class="page-hdr"><div class="page-hdr-left"><h1>Performance <em>Analytics</em></h1><p>Reward trends · oracle match rate · safety audit</p></div></div>
   <div class="stats-row" style="grid-template-columns:repeat(4,1fr);">
@@ -908,7 +850,6 @@ button,select,textarea,input{font-family:var(--sans);}
   </div>
 </div>
 
-<!-- ══════════════════════════ LEADERBOARD ══════════════════════════ -->
 <div class="view" id="view-leaderboard">
   <div class="page-hdr">
     <div class="page-hdr-left"><h1>Agent <em>Leaderboard</em></h1><p>Global rankings · Llama 3 70B leads (RL aligned)</p></div>
@@ -920,7 +861,7 @@ button,select,textarea,input{font-family:var(--sans);}
   </div>
 </div>
 
-<!-- ══════════════════════════ CHAT ══════════════════════════ -->
+
 <div class="view" id="view-chat">
   <div class="page-hdr">
     <div class="page-hdr-left"><h1>Clinical AI <em>Assistant</em></h1><p>Server-side · Claude Sonnet / smart fallback · voice enabled</p></div>
@@ -997,7 +938,7 @@ button,select,textarea,input{font-family:var(--sans);}
   </div>
 </div>
 
-<!-- ══════════════════════════ API DOCS ══════════════════════════ -->
+
 <div class="view" id="view-api">
   <div class="page-hdr">
     <div class="page-hdr-left"><h1>API <em>Reference</em></h1><p>v5 · FastAPI · All endpoints with live try-it</p></div>
@@ -1034,9 +975,6 @@ button,select,textarea,input{font-family:var(--sans);}
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script>
-/* ══════════════════════════════════════════
-   CONFIG & STATE
-══════════════════════════════════════════ */
 const BASE = window.location.origin;
 const G = {
   apiOnline:false, selected:null, esiChoice:null,
@@ -1046,10 +984,6 @@ const G = {
   timerRunning:false, timerSecs:3600, timerInt:null,
   lineChart:null, radarChart:null,
 };
-
-/* ══════════════════════════════════════════
-   PATIENT DATABASE
-══════════════════════════════════════════ */
 const PATIENTS = {
   triage_easy:{name:"Samrudh AJ",age:19,sex:"M",initials:"SJ",task:"triage_easy",domain:"triage",diff:"easy",vitals:{HR:{v:76,u:"bpm",s:"ok"},BP:{v:"122/78",u:"mmHg",s:"ok"},SpO2:{v:99,u:"%",s:"ok"},Temp:{v:"36.6",u:"°C",s:"ok"}},complaint:"Mild ankle sprain after basketball. No weight-bearing difficulty. Mild swelling over lateral malleolus.",tags:["No PMH","No meds","NKDA","Ottawa rules negative"],rhythm:"normal_sinus",esiCorrect:5,priority:5,status:"stable",drugInteractions:[],labs:{},mortalityBase:0.5,clinicalPearl:"Ottawa Ankle Rules: no bony tenderness at posterior malleolus. No X-ray needed.",keyDecision:"ESI-5 — non-urgent, can wait >2h safely. RICE therapy."},
   triage_medium:{name:"Sophia Kira",age:34,sex:"F",initials:"SK",task:"triage_medium",domain:"triage",diff:"medium",vitals:{HR:{v:102,u:"bpm",s:"warn"},BP:{v:"148/92",u:"mmHg",s:"warn"},SpO2:{v:96,u:"%",s:"ok"},RR:{v:20,u:"/min",s:"warn"}},complaint:"Crushing chest pain 8/10 radiating to left arm + jaw. Diaphoresis, nausea. Onset 45 min ago. Levine's sign positive.",tags:["HTN","DM2","Smoker 30 pk-yr","Metformin","Family Hx CAD"],rhythm:"sinus_tachycardia",esiCorrect:2,priority:2,status:"risk",drugInteractions:[],labs:{troponin:"pending",ECG:"STEMI V1-V4"},mortalityBase:8,clinicalPearl:"STEMI anterior wall: ST elevation V1-V4 + Levine's sign + radiation to jaw. D2B target <90 minutes.",keyDecision:"ESI-2 — emergent. Immediate 12-lead ECG, Aspirin 324mg, IV access × 2, cath lab activation."},
@@ -1062,9 +996,6 @@ const PATIENTS = {
   sepsis_hard:{name:"Dr. Johnny English",age:61,sex:"M",initials:"JE",task:"sepsis_hard",domain:"sepsis",diff:"hard",vitals:{HR:{v:126,u:"bpm",s:"crit"},BP:{v:"82/46",u:"mmHg",s:"crit"},SpO2:{v:89,u:"%",s:"crit"},GCS:{v:"13/15",u:"",s:"warn"}},complaint:"Post-op day 3 (bowel resection). Wound erythema, purulent discharge, fever 39.8°C, mottled skin. Intraoperative contamination suspected.",tags:["CRC post-op D3","Prednisolone 20mg ⚠","DM2","Enoxaparin"],rhythm:"vt_flutter",esiCorrect:1,priority:1,status:"critical",drugInteractions:[{a:"Prednisolone 20mg",b:"Sepsis",mech:"Chronic steroids → adrenal suppression → stress-dose hydrocortisone needed",sev:"crit"},{a:"Enoxaparin",b:"Platelets 68",mech:"Thrombocytopenia — DIC developing. Hold anticoagulation.",sev:"crit"}],labs:{WBC:28.6,lactate:6.8,platelets:68,INR:2.1,creatinine:3.2},mortalityBase:45,clinicalPearl:"Prednisolone → relative adrenal insufficiency. Give stress-dose hydrocortisone. Lactate 6.8 = profound shock.",keyDecision:"ESI-1 IMMEDIATE. Surgical source control. Hydrocortisone 100mg IV q6h. Norepinephrine + vasopressin. ICU STAT."},
 };
 
-/* ══════════════════════════════════════════
-   VOICE ENGINE
-══════════════════════════════════════════ */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const SR_OK = !!SR;
 let vbRec = null, vbActive = false, vbFinal = '', vbConf = 0, vbAction = null;
@@ -1230,9 +1161,6 @@ document.addEventListener('keyup', e => {
   if (e.code === 'Space' && spaceDown) { spaceDown = false; if (vbActive) stopVb(); }
 });
 
-/* ══════════════════════════════════════════
-   CLOCK + NAV
-══════════════════════════════════════════ */
 setInterval(() => { document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-GB'); }, 1000);
 
 function navTo(name, btn) {
@@ -1246,9 +1174,6 @@ function navTo(name, btn) {
   if (name === 'api') showEndpoint('health', document.querySelector('.endpoint-btn'));
 }
 
-/* ══════════════════════════════════════════
-   HEALTH CHECK
-══════════════════════════════════════════ */
 async function checkHealth() {
   const pill = document.getElementById('api-pill'), txt = document.getElementById('api-txt');
   try {
@@ -1283,9 +1208,6 @@ async function checkChatMode() {
   } catch(e) {}
 }
 
-/* ══════════════════════════════════════════
-   BOARD
-══════════════════════════════════════════ */
 function buildBoard() { G.boardPts = Object.values(PATIENTS); renderBoard(G.boardPts); }
 function renderBoard(pts) {
   Object.values(G.ecgAnims).forEach(id => cancelAnimationFrame(id)); G.ecgAnims = {};
@@ -1354,9 +1276,6 @@ function sortBoard(by) {
   renderBoard(s);
 }
 
-/* ══════════════════════════════════════════
-   ECG
-══════════════════════════════════════════ */
 function genECG(profile, W, H, detail) {
   const mid = H / 2, sc = detail ? 1.5 : 1.0, pts = [];
   if (profile === 'atrial_fib' || profile === 'afib_tachycardia') {
@@ -1452,9 +1371,6 @@ function startBigECG(p) {
   draw();
 }
 
-/* ══════════════════════════════════════════
-   PATIENT DETAIL
-══════════════════════════════════════════ */
 function openPatient(taskId) {
   G.selected = taskId; G.esiChoice = null;
   const p = PATIENTS[taskId]; if (!p) return;
@@ -1616,9 +1532,6 @@ function drawGauge(pct, verdict) {
   if (verd) { const vcl = pct > 30 ? 'vb-unsafe' : pct > 15 ? 'vb-caution' : 'vb-safe'; verd.innerHTML = `<span class="verdict-badge ${vcl}">${verdict}</span>`; }
 }
 
-/* ══════════════════════════════════════════
-   AI ANALYSIS
-══════════════════════════════════════════ */
 async function loadAnalysis(p, taskId) {
   const el = document.getElementById('dv-stream'); if (!el) return;
   el.innerHTML = `<div class="typing-indicator"><div class="ti-dot"></div><div class="ti-dot"></div><div class="ti-dot"></div><span style="font-size:10.5px;color:var(--text4);margin-left:5px;">Analysing with Claude / Llama…</span></div>`;
@@ -1673,9 +1586,6 @@ function renderAiOut(text, done = false) {
   el.innerHTML = html + (done ? '' : "<span class='ai-cursor'></span>");
 }
 
-/* ══════════════════════════════════════════
-   SUBMIT DECISION
-══════════════════════════════════════════ */
 async function submitDecision() {
   const taskId = G.selected; if (!taskId) return;
   const p = PATIENTS[taskId];
@@ -1755,9 +1665,6 @@ function showResult(reward, taskId, p, step, undertriage) {
   setTimeout(() => { const rb = document.querySelectorAll('#view-detail .tab')[1]; if (rb) switchTab('reward', rb); }, 500);
 }
 
-/* ══════════════════════════════════════════
-   UI HELPERS
-══════════════════════════════════════════ */
 function pickESI(n) { G.esiChoice = n; document.querySelectorAll('.esi-btn').forEach(b => b.classList.remove('sel')); document.querySelector(`.esi-btn[data-e="${n}"]`)?.classList.add('sel'); }
 function switchTab(name, btn) { ['ai','reward','checklist','log'].forEach(t => { const e = document.getElementById(`tab-${t}`); if (e) e.style.display = t === name ? '' : 'none'; }); document.querySelectorAll('#view-detail .tab').forEach(b => b.classList.remove('active')); if (btn) btn.classList.add('active'); }
 function chk(item, listId, progId, pctId) { item.querySelector('.cl-chk').classList.toggle('done'); const list = document.getElementById(listId); if (!list) return; const total = list.querySelectorAll('.cl-item').length; const done = list.querySelectorAll('.cl-chk.done').length; const pct = Math.round(done / total * 100); const prog = document.getElementById(progId), pctEl = document.getElementById(pctId); if (prog) prog.style.width = pct + '%'; if (pctEl) pctEl.textContent = pct + '%'; }
@@ -1812,9 +1719,6 @@ function toggleTimer() {
   }
 }
 
-/* ══════════════════════════════════════════
-   CHATBOT
-══════════════════════════════════════════ */
 function chatAbout(taskId) {
   const p = PATIENTS[taskId]; if (!p) return;
   navTo('chat', document.querySelectorAll('.tn')[5]);
@@ -1879,9 +1783,6 @@ function speakLast() { if (!window.speechSynthesis || !G.chatHistory.length) ret
 function chatKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }
 function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(110, el.scrollHeight) + 'px'; }
 
-/* ══════════════════════════════════════════
-   AI vs AI BENCHMARK
-══════════════════════════════════════════ */
 async function runBenchmark() {
   const taskId = document.getElementById('bench-task').value;
   const res = document.getElementById('bench-result');
@@ -1922,9 +1823,6 @@ async function runBenchmark() {
 }
 function runBenchFromDetail() { document.getElementById('bench-task').value = G.selected || 'triage_easy'; navTo('aivai', document.querySelectorAll('.tn')[2]); runBenchmark(); }
 
-/* ══════════════════════════════════════════
-   ANALYTICS
-══════════════════════════════════════════ */
 function renderAnalytics() {
   document.getElementById('an-eps').textContent = G.eps;
   if (G.rewards.length) {
@@ -1949,9 +1847,6 @@ function renderAnalytics() {
   }
 }
 
-/* ══════════════════════════════════════════
-   LEADERBOARD
-══════════════════════════════════════════ */
 async function loadLB() {
   const body = document.getElementById('lb-body');
   body.innerHTML = `<div class="typing-indicator" style="padding:16px;"><div class="ti-dot"></div><div class="ti-dot"></div><div class="ti-dot"></div></div>`;
@@ -1978,9 +1873,6 @@ async function loadLB() {
     </div>`).join('');
 }
 
-/* ══════════════════════════════════════════
-   API DOCS — LIVE TRY-IT
-══════════════════════════════════════════ */
 const API_DOCS = {
   health: {
     method:'GET', path:'/health', title:'Health Check',
@@ -2136,14 +2028,8 @@ async function tryEndpoint(key) {
 }
 function copyCode(id) { const el = document.getElementById(id); if (el) { navigator.clipboard.writeText(el.textContent).then(() => { const btn = el.parentElement.querySelector('.copy-btn'); if (btn) { btn.textContent = 'copied!'; setTimeout(() => btn.textContent = 'copy', 2000); } }); } }
 
-/* ══════════════════════════════════════════
-   UTILS
-══════════════════════════════════════════ */
 function esc(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-/* ══════════════════════════════════════════
-   INIT
-══════════════════════════════════════════ */
 window.addEventListener('DOMContentLoaded', () => {
   if (!SR_OK) { document.querySelectorAll('.mic-btn,.chat-mic').forEach(b => { b.disabled = true; b.title = 'Speech recognition requires Chrome or Edge'; }); }
 });
