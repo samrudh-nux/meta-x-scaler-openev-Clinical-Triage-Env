@@ -9,10 +9,6 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ACTION SPACE
-# ──────────────────────────────────────────────────────────────────────────────
-
 ACTIONS = [
     "Assign ESI-1 (Resuscitation)",    # Immediate life threat
     "Assign ESI-2 (Emergent)",         # High-risk, < 10 min
@@ -37,10 +33,6 @@ SAFETY_MATRIX = {
     (5, 1): 0.1, (5, 2): 0.3, (5, 3): 0.6,  (5, 4): 0.9,  (5, 5): 1.0,
 }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# STATE FEATURISATION
-# ──────────────────────────────────────────────────────────────────────────────
 
 def featurise(state: Dict[str, Any]) -> Tuple:
     """
@@ -104,9 +96,6 @@ def _esi_from_feat(feat: Tuple) -> int:
     return 3
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# PRIORITISED EXPERIENCE REPLAY
-# ──────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Experience:
@@ -152,9 +141,6 @@ class PrioritisedReplayBuffer:
         return len(self._buf)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# EPISODE METRICS
-# ──────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class EpisodeMetrics:
@@ -173,9 +159,6 @@ class EpisodeMetrics:
         return asdict(self)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# DOUBLE Q-LEARNING AGENT
-# ──────────────────────────────────────────────────────────────────────────────
 
 class QLearningAgent:
     """
@@ -239,9 +222,6 @@ class QLearningAgent:
         self._ep_safety:      List[float] = []
         self._ep_undertriage: List[bool]  = []
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # CORE API
-    # ──────────────────────────────────────────────────────────────────────────
 
     def select_action(
         self,
@@ -412,9 +392,6 @@ class QLearningAgent:
         self._ep_undertriage.clear()
         self._ep_start = time.time()
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # POLICY & ANALYTICS
-    # ──────────────────────────────────────────────────────────────────────────
 
     def get_q_values(self, state: Dict[str, Any]) -> Dict[str, float]:
         feat = featurise(state)
@@ -516,10 +493,6 @@ class QLearningAgent:
         rows.sort(key=lambda r: -r["Visits"])
         return rows[:25]
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # PERSISTENCE
-    # ──────────────────────────────────────────────────────────────────────────
-
     def save(self, path: str = "q_table.json"):
         """Serialise Q-tables and analytics to JSON."""
         data = {
@@ -567,9 +540,6 @@ class QLearningAgent:
             print(f"Q-table load error: {e}")
             return False
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # AUTONOMOUS TRAINING EPISODE (for /rl/train endpoint)
-    # ──────────────────────────────────────────────────────────────────────────
 
     def run_training_episode(self, env) -> Dict[str, Any]:
         """
