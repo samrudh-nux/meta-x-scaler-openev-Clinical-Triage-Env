@@ -6,10 +6,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from models import TriageAction, MedicationSafetyAction, SepsisManagementAction
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared result dataclass
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class GradeResult:
     """Detailed grading result returned by every grader."""
@@ -22,9 +18,6 @@ class GradeResult:
     teaching_point: str = ""             # one sentence educational note
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared NLP helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _tokenise(text: str) -> List[str]:
     """Lowercase word tokens, strip punctuation."""
@@ -77,9 +70,6 @@ def _false_positive_rate(proposed: List[str], ground_truth: List[str]) -> float:
     return fps / len(proposed)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GRADER 1 — Emergency Triage (ESI Level Assignment)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TriageGrader:
     """
@@ -273,10 +263,6 @@ class TriageGrader:
         return "\n".join(lines)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GRADER 2 — Medication Safety Review
-# ─────────────────────────────────────────────────────────────────────────────
-
 class MedicationSafetyGrader:
     """
     7-component medication safety grader.
@@ -334,7 +320,7 @@ class MedicationSafetyGrader:
         fp_rate = _false_positive_rate(all_proposed, all_gt)
         cs["fp_penalty"] = max(0.0, 1.0 - fp_rate * 1.5)
 
-        # ── Critical error rules ─────────────────────────────────────────────
+        # ── Critical error rules ────────────
         gt_sev = gt["severity"]
         prop_sev = action.severity_assessment.lower()
 
@@ -426,10 +412,6 @@ class MedicationSafetyGrader:
             lines.append(f"\n📚 Key Finding: {gt['key_findings']}")
         return "\n".join(lines)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GRADER 3 — Sepsis Recognition & Management
-# ─────────────────────────────────────────────────────────────────────────────
 
 class SepsisGrader:
     """
