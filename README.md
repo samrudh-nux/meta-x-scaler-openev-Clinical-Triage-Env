@@ -475,7 +475,7 @@ All 9 scenarios were validated against:
   year      = {2026},
   publisher = {HuggingFace Spaces},
   url       = {https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv},
-  note      = {Meta PyTorch OpenEnv Hackathon × Scaler School of Technology}
+  note      = { PyTorch OpenEnv }
 }
 ```
 
@@ -491,7 +491,7 @@ All 9 scenarios were validated against:
 
 <div align="center">
 
-**Built for the Meta PyTorch OpenEnv Hackathon × Scaler School of Technology**
+
 
 *Demonstrating that Llama 3 can be a physician's peer reviewer, not just an assistant.*
 
