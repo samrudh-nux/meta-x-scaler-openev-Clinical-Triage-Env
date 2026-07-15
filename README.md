@@ -495,6 +495,5 @@ All 9 scenarios were validated against:
 
 *Demonstrating that Llama 3 can be a physician's peer reviewer, not just an assistant.*
 
-[**▶ Try the Live Demo**](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv)
 
 </div>
