@@ -29,7 +29,7 @@ tags:
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
-[![HuggingFace Space](https://img.shields.io/badge/🤗_Space-Live_Demo-FFD21E?style=for-the-badge)](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv)
+
 
 # 🏥 ClinicalTriageEnv
 
@@ -37,7 +37,7 @@ tags:
 
 **9 clinical tasks · 3 medical domains · Real graders · LLM reward shaping · Zero hallucination tolerance**
 
-[**▶ Live Demo**](https://huggingface.co/spaces/samrudh-nux/ClinicalTriageEnv) · [**API Docs**](https://samrudh-nux-clinicaltriageenv.hf.space/docs) · [**GitHub**](https://github.com/samrudh-nux/meta-x-scaler-openev-Clinical-Triage-Env)
+· [**API Docs**](https://samrudh-nux-clinicaltriageenv.hf.space/docs) · [**GitHub**](https://github.com/samrudh-nux/meta-x-scaler-openev-Clinical-Triage-Env)
 
 </div>
 
